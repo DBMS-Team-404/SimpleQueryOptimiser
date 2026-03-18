@@ -30,7 +30,7 @@ json final_ast;
 
 /* Define types for non-terminals */
 %type <str_list> select_list
-%type <json_node> table_reference condition query
+%type <json_node> table_reference condition query expression
 
 %start sql_statement
 
@@ -101,19 +101,81 @@ table_reference:
         });
         free($1); // freeing the strdup from flex
     }
+    | table_reference JOIN ID ON condition {
+        // creating right-side node
+            json* right_table = new json({
+            {"node_type", "LOGICAL_GET"},
+            {"properties", {
+                {"table", std::string($3)},
+                {"alias", std::string($3) + "_alias"}
+            }}
+        });
+
+        // combine left and right table into a join node
+        $$ = new json({
+            {"node_type", "LOGICAL_JOIN"},
+            {"properties", {
+                {"join_type", "INNER"},
+                {"condition", *$5}
+            }},
+            {"children", {*$1, *right_table}}
+        });
+        delete $1; delete right_table; delete $5; free($3);
+    }
     ;
 
-condition:
-    ID EQ NUM {
-        $$ = new json({
-            {"expression_type", "COMPARISON"},
-            {"operator", "="},
-            {"left", { {"expression_type", "COLUMN"}, {"value", std::string($1)} }},
-            {"right", { {"expression_type", "CONSTANT"}, {"value", $3} }}
-        });
+expression:
+    ID {
+        $$ = new json({{"expression_type", "COLUMN"}, {"value", std :: string($1)}});
+        free($1);
+    }
+    | NUM {
+        $$ = new josn({{"expression_type", "CONSTANT"}, {"value", std :: to_string($1)}});
+    }
+    | STRING_LITERAL{
+        $$ = new json({{"expression_type", "CONSTANT"}, {"value", std :: string($1)}});
         free($1);
     }
     ;
+
+condition:
+    expression EQ expression {
+        $$ = new json({ {"expression_type", "COMPARISON"}, {"operator", "="}, {"left", *$1}, {"right", *$3} });
+        delete $1; delete $3;
+    }
+    | expression NE expression {
+        $$ = new json({ {"expression_type", "COMPARISON"}, {"operator", "<>"}, {"left", *$1}, {"right", *$3} });
+        delete $1; delete $3;
+    }
+    | expression LT expression {
+        $$ = new json({ {"expression_type", "COMPARISON"}, {"operator", "<"}, {"left", *$1}, {"right", *$3} });
+        delete $1; delete $3;
+    }
+    | expression GT expression {
+        $$ = new json({ {"expression_type", "COMPARISON"}, {"operator", ">"}, {"left", *$1}, {"right", *$3} });
+        delete $1; delete $3;
+    }
+    | expression LE expression {
+        $$ = new json({ {"expression_type", "COMPARISON"}, {"operator", "<="}, {"left", *$1}, {"right", *$3} });
+        delete $1; delete $3;
+    }
+    | expression GE expression {
+        $$ = new json({ {"expression_type", "COMPARISON"}, {"operator", ">="}, {"left", *$1}, {"right", *$3} });
+        delete $1; delete $3;
+    }
+    | condition AND condition {
+        $$ = new json({ {"expression_type", "LOGICAL_AND"}, {"left", *$1}, {"right", *$3} });
+        delete $1; delete $3;
+    }
+    | condition OR condition {
+        $$ = new json({ {"expression_type", "LOGICAL_OR"}, {"left", *$1}, {"right", *$3} });
+        delete $1; delete $3;
+    }
+    | LPAREN condition RPAREN {
+        $$ = $2; 
+    }
+    ;
+
 
 %%
 
