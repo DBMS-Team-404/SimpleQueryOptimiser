@@ -1,17 +1,26 @@
+%code requires {
+    #include <iostream>
+    #include <string>
+    #include <vector>
+    #include "json.hpp"
+    
+    // For the header file and union
+    using json = nlohmann::json;
+}
+
 %{
-#include <iostream>
-#include <string>
-#include <vector>
-#include "../include/nlohmann/json.hpp"
+    // --- THE MAGIC FIX: Include it here too for the .c file ---
+    #include "json.hpp"
+    // ----------------------------------------------------------
 
-using json = nlohmann::json;
+    using json = nlohmann::json;
 
-extern int yylex();
-extern int yylineno;
-void yyerror(const char *s);
+    extern int yylex();
+    extern int yylineno;
+    void yyerror(const char *s);
 
-/* output json object*/
-json final_ast;
+    /* Explicitly use the full namespace */
+    nlohmann::json final_ast;
 %}
 
 /* types for our semantic values */
@@ -19,18 +28,24 @@ json final_ast;
     int num;
     char* str;
     std::vector<std::string>* str_list;
-    nlohmann::json* json_node;
+    json* json_node; 
 }
 
+/* Base Tokens used in your rules */
 %token <str> ID STRING_LITERAL
 %token <num> NUM
 %token SELECT FROM WHERE JOIN ON AND OR EQ LT GT LE GE NE
-%token COMMA SEMICOLON LPAREN RPAREN
-%token ASTERISK
+%token COMMA SEMICOLON LPAREN RPAREN ASTERISK GROUP BY HAVING
+
+/* Declare ALL the extra tokens your lexer is trying to return */
+%token ALL DISTINCT ORDER ASC DESC USING NULLS FIRST LAST UNION INTERSECT
+%token EXCEPT INSERT INTO VALUES DEFAULT WITH RECURSIVE AS UPDATE ONLY SET
+%token ROW IS NOT NULL_VAL DELETE EXISTS BETWEEN IN INNER LEFT RIGHT FULL
+%token CROSS NATURAL CONCAT PLUS MINUS DIV DOT
 
 /* Define types for non-terminals */
-%type <str_list> select_list
-%type <json_node> table_reference condition query expression
+%type <str_list> select_list group_by_list
+%type <json_node> table_reference condition query expression where_clause group_by_clause
 
 %start sql_statement
 
@@ -39,38 +54,71 @@ json final_ast;
 sql_statement:
     query SEMICOLON {
         final_ast = *$1;
-        delete $1; // Clean up
+        delete $1; 
     }
     ;
 
 query:
-    SELECT select_list FROM table_reference WHERE condition {
-        // Wraping the GET node in a FILTER node
-        json* filter_node = new json({
-            {"node_type", "LOGICAL_FILTER"},
-            {"properties", { {"predicate", *$6} }},
-            {"children", { *$4 }} // table_reference 
-        });
+    SELECT select_list FROM table_reference where_clause group_by_clause {
+        json* current_node = $4; 
 
-        // Wraping the FILTER node in a PROJECT node
+        if ($5 != nullptr) {
+            current_node = new json({
+                {"node_type", "LOGICAL_FILTER"},
+                {"properties", { {"predicate", *$5} }},
+                {"children", { *current_node }}
+            });
+            delete $5;
+        }
+
+        if ($6 != nullptr) {
+            current_node = new json({
+                {"node_type", "LOGICAL_AGGREGATE"},
+                {"properties", { 
+                    {"group_columns", (*$6)["groups"]},
+                    {"having", (*$6)["having"]} 
+                }},
+                {"children", { *current_node }}
+            });
+            delete $6;
+        }
+
         $$ = new json({
             {"node_type", "LOGICAL_PROJECT"},
             {"properties", { {"columns", *$2} }},
-            {"children", { *filter_node }}
+            {"children", { *current_node }}
         });
 
-        delete $2; delete $4; delete $6; delete filter_node;
+        delete $2;
     }
+    ;
 
-    | SELECT select_list FROM table_reference {
-        // no where clause just project
-        $$ = new json({
-            {"node_type", "LOGICAL_PROJECT"},
-            {"properties", { {"columns", *$2} }},
-            {"children", { *$4 }}
-        });
-        
-        delete $2; delete $4;
+where_clause:
+    WHERE condition { $$ = $2; }
+    | /* empty */   { $$ = nullptr; }
+    ;
+
+group_by_clause:
+    GROUP BY group_by_list {
+        $$ = new json({{"groups", *$3}, {"having", nullptr}});
+        delete $3;
+    }
+    | GROUP BY group_by_list HAVING condition {
+        $$ = new json({{"groups", *$3}, {"having", *$5}});
+        delete $3; delete $5;
+    }
+    | /* empty */ { $$ = nullptr; }
+    ;
+
+group_by_list:
+    ID {
+        $$ = new std::vector<std::string>{std::string($1)};
+        free($1);
+    }
+    | group_by_list COMMA ID {
+        $1->push_back(std::string($3));
+        $$ = $1;
+        free($3);
     }
     ;
 
@@ -78,15 +126,15 @@ select_list:
     ID {
         $$ = new std::vector<std::string>(); 
         $$->push_back(std::string($1));
-        free($1); // Freeing the strdup from flex 
+        free($1); 
     }
     | select_list COMMA ID {
-        $1->push_back(std::string($3)); // pushing id into the list formed till now
+        $1->push_back(std::string($3)); 
         $$ = $1;
-        free($3); // freeing the strdup form flex
+        free($3); 
     }
     | ASTERISK {
-        $$ = new std::vector<std::string>{"*"}; // pick everything
+        $$ = new std::vector<std::string>{"*"}; 
     }
     ;
 
@@ -99,11 +147,10 @@ table_reference:
                 {"alias", std::string($1) + "_alias"}
             }}
         });
-        free($1); // freeing the strdup from flex
+        free($1); 
     }
     | table_reference JOIN ID ON condition {
-        // creating right-side node
-            json* right_table = new json({
+        json* right_table = new json({
             {"node_type", "LOGICAL_GET"},
             {"properties", {
                 {"table", std::string($3)},
@@ -111,7 +158,6 @@ table_reference:
             }}
         });
 
-        // combine left and right table into a join node
         $$ = new json({
             {"node_type", "LOGICAL_JOIN"},
             {"properties", {
@@ -126,14 +172,19 @@ table_reference:
 
 expression:
     ID {
-        $$ = new json({{"expression_type", "COLUMN"}, {"value", std :: string($1)}});
+        $$ = new json({{"expression_type", "COLUMN"}, {"value", std::string($1)}});
         free($1);
     }
+    | ID DOT ID { 
+        std::string full_column = std::string($1) + "." + std::string($3);
+        $$ = new json({{"expression_type", "COLUMN"}, {"value", full_column}});
+        free($1); free($3);
+    }
     | NUM {
-        $$ = new josn({{"expression_type", "CONSTANT"}, {"value", std :: to_string($1)}});
+        $$ = new json({{"expression_type", "CONSTANT"}, {"value", std::to_string($1)}});
     }
     | STRING_LITERAL{
-        $$ = new json({{"expression_type", "CONSTANT"}, {"value", std :: string($1)}});
+        $$ = new json({{"expression_type", "CONSTANT"}, {"value", std::string($1)}});
         free($1);
     }
     ;
@@ -176,7 +227,6 @@ condition:
     }
     ;
 
-
 %%
 
 void yyerror(const char *s) 
@@ -184,9 +234,7 @@ void yyerror(const char *s)
     std::cerr << "Parse Error at line " << yylineno << ": " << s << "\n";
 }
 
-// helper function 
-json parse_sql_to_json() {
+nlohmann::json parse_sql_to_json() {
     yyparse();
     return final_ast;
 }
-
