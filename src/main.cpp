@@ -2,13 +2,21 @@
 #include <fstream>
 #include <string>
 #include <memory>
+#include <cstdio> // Required for FILE* to interface with Flex/Bison
 #include "../include/ast_nodes.hpp"
-#include "../include/nlohmann/json.hpp" // Make sure this path matches your folder structure!
+#include "../include/nlohmann/json.hpp" 
 
 using json = nlohmann::json;
 
-// Forward declaration so nodes can call it recursively
+// ---------------------------------------------------------
+// FORWARD DECLARATIONS
+// ---------------------------------------------------------
+// 1. Our C++ AST parser
 std::unique_ptr<PlanNode> parseNode(const json& j);
+
+// 2. The Flex/Bison hooks (Bridging C to C++)
+extern FILE* yyin; // Flex's input file pointer
+extern json parse_sql_to_json(); // The helper function from your teammate's parser.y
 
 // ---------------------------------------------------------
 // 1. EXPRESSION PARSER
@@ -104,36 +112,49 @@ int main(int argc, char* argv[]) {
 
     if (argc < 2) {
         std::cerr << "Error: No input file provided.\n";
-        std::cerr << "Usage: ./optimizer <path_to_json_file>\n";
+        std::cerr << "Usage: ./optimizer <path_to_sql_file.sql>\n";
         return 1;
     }
 
     std::string file_path = argv[1];
-    std::ifstream input_file(file_path);
-    if (!input_file.is_open()) {
+    
+    // 1. Open the SQL file using standard C FILE* (because Flex needs it)
+    FILE* input_file = fopen(file_path.c_str(), "r");
+    if (!input_file) {
         std::cerr << "Error: Could not open file " << file_path << "\n";
         return 1;
     }
 
-    try {
-        // Read the file into a JSON object
-        json query_json;
-        input_file >> query_json;
+    // 2. Tell the Flex lexer to read from this file instead of the keyboard
+    yyin = input_file;
 
-        // The Moment of Truth: Parse the JSON into C++ Objects
-        std::cout << "Parsing file: " << file_path << "...\n\n";
+    try {
+        std::cout << "Parsing SQL file: " << file_path << "...\n\n";
+
+        // 3. The Magic: Call Bison to parse SQL and return our JSON Contract!
+        json query_json = parse_sql_to_json();
+
+        if (query_json.empty() || query_json.is_null()) {
+            std::cerr << "Failed to parse SQL into AST. Check syntax.\n";
+            fclose(input_file);
+            return 1;
+        }
+
+        // 4. Our original magic: Convert JSON to C++ Memory Structures
         std::unique_ptr<PlanNode> root = parseNode(query_json);
 
         // Print the resulting tree to the terminal
         std::cout << "--- LOGICAL EXECUTION PLAN ---\n";
         root->print(0);
-        std::cout << "\nStatus: Ingestion Complete!\n";
+        std::cout << "\nStatus: SQL to AST Ingestion Complete!\n";
 
     } catch (const json::exception& e) {
-        std::cerr << "JSON Parsing Error: " << e.what() << "\n";
-        std::cerr << "Make sure your JSON strictly follows the API Contract!\n";
+        std::cerr << "AST Generation Error: " << e.what() << "\n";
+        std::cerr << "Make sure your Bison grammar outputs the correct API Contract!\n";
+        fclose(input_file);
         return 1;
     }
 
+    fclose(input_file);
     return 0;
 }
