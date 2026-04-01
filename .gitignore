@@ -28,3 +28,13 @@ optimizer
 .vscode/
 .idea/
 .DS_Store
+
+# --- Custom DBMS Project Files ---
+
+# Ignore generated Flex and Bison files
+lex.yy.c
+parser.tab.c
+parser.tab.h
+
+# Ignore the bin folder (where test_parser and optimizer live)
+bin/
