@@ -64,18 +64,40 @@ private:
     void validateColumn(const std::string& column_name) {
         if (column_name == "*") return; // Allow select star
 
+        // NEW: Check if the column is fully qualified (e.g., "orders.user_id")
+        size_t dot_pos = column_name.find('.');
+        if (dot_pos != std::string::npos) {
+            std::string table_part = column_name.substr(0, dot_pos);
+            std::string col_part = column_name.substr(dot_pos + 1);
+
+            // 1. Verify the table is actually in the query
+            bool table_active = false;
+            for (const auto& active_table : active_tables) {
+                if (active_table == table_part) {
+                    table_active = true;
+                    break;
+                }
+            }
+            if (!table_active) {
+                throw std::runtime_error("Table prefix '" + table_part + "' is not in the FROM/JOIN clause.");
+            }
+
+            // 2. Ask the catalog if the specific column exists in that specific table
+            if (!catalog.columnExists(table_part, col_part)) {
+                throw std::runtime_error("Column '" + col_part + "' not found in table '" + table_part + "'.");
+            }
+            return; // Validated successfully!
+        }
+
+        // ORIGINAL: If no dot exists, just search all active tables
         bool column_found = false;
-        
-        // Check every table that is currently part of this query
         for (const auto& table : active_tables) {
-            // Ask the catalog if this table contains the column
             if (catalog.columnExists(table, column_name)) {
                 column_found = true;
                 break;
             }
         }
 
-        // If we checked all active tables and couldn't find the column, throw an error!
         if (!column_found) {
             throw std::runtime_error("Column not found in active tables: " + column_name);
         }

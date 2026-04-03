@@ -4,7 +4,10 @@
 #include <memory>
 #include <cstdio> // Required for FILE* to interface with Flex/Bison
 #include "../include/ast_nodes.hpp"
-#include "../include/nlohmann/json.hpp" // Make sure this path matches your folder structure!
+#include "json.hpp"
+#include "semantic_analyzer.hpp"
+#include "optimizer.hpp"
+#include "cost_based_optimizer.hpp"
 
 using json = nlohmann::json;
 
@@ -87,6 +90,18 @@ std::unique_ptr<PlanNode> parseNode(const json& j) {
             jt, parseExpression(props.at("condition"))
         );
     }
+    else if (type == "LOGICAL_AGGREGATE") {
+        std::vector<std::string> group_cols;
+        // Extract the grouping columns from the JSON
+        if (props.contains("group_columns")) {
+            for (const auto& col : props.at("group_columns")) {
+                group_cols.push_back(col.get<std::string>());
+            }
+        }
+        // Create an empty aggregates vector for now (to satisfy the constructor)
+        std::vector<AggregateConfig> aggs; 
+        node_ptr = std::make_unique<LogicalAggregateNode>(group_cols, aggs);
+    }
     else {
         std::cerr << "Unsupported node type: " << type << "\n";
         exit(1);
@@ -146,6 +161,32 @@ int main(int argc, char* argv[]) {
         // Print the resulting tree to the terminal
         std::cout << "--- LOGICAL EXECUTION PLAN ---\n";
         root->print(0);
+
+        MockCatalog my_catalog; 
+        
+        // 2. Initialize your analyzer with your catalog interface
+        SemanticAnalyzer analyzer(my_catalog);
+
+        // 3. Pass the parsed tree (root) into the validate function.
+        if (analyzer.validateQuery(root.get())) {
+            std::cout << "\n[SUCCESS] Semantic check passed! Ready for optimization.\n";
+            // --- NEW OPTIMIZATION STEP ---
+            RuleBasedOptimizer rbo(my_catalog);
+            root = rbo.optimize(std::move(root));
+            
+            std::cout << "\n--- OPTIMIZED EXECUTION PLAN ---\n";
+            root->print(0);
+            // -----------------------------
+            CostBasedOptimizer cbo(my_catalog); // Pass the catalog so it can read stats!
+            root = cbo.optimize(std::move(root));
+
+            std::cout << "\n--- FINAL OPTIMIZED EXECUTION PLAN ---\n";
+            root->print(0);
+        } else {
+            std::cout << "\n[FAILED] Semantic check failed. Stopping execution.\n";
+            return 1; 
+        }
+        
         std::cout << "\nStatus: Ingestion Complete!\n";
 
     } catch (const json::exception& e) {

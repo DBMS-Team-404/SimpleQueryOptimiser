@@ -28,6 +28,7 @@ optimizer
 .vscode/
 .idea/
 .DS_Store
+query.json
 
 # --- Custom DBMS Project Files ---
 
