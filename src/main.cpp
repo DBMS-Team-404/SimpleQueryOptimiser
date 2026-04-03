@@ -4,7 +4,7 @@
 #include <memory>
 #include <cstdio> // Required for FILE* to interface with Flex/Bison
 #include "../include/ast_nodes.hpp"
-#include "../include/nlohmann/json.hpp" 
+#include "../include/nlohmann/json.hpp" // Make sure this path matches your folder structure!
 
 using json = nlohmann::json;
 
@@ -146,7 +146,7 @@ int main(int argc, char* argv[]) {
         // Print the resulting tree to the terminal
         std::cout << "--- LOGICAL EXECUTION PLAN ---\n";
         root->print(0);
-        std::cout << "\nStatus: SQL to AST Ingestion Complete!\n";
+        std::cout << "\nStatus: Ingestion Complete!\n";
 
     } catch (const json::exception& e) {
         std::cerr << "AST Generation Error: " << e.what() << "\n";

@@ -1,0 +1,43 @@
+{
+    "node_type": "LOGICAL_PROJECT",
+    "properties": {
+        "columns": ["name"]
+    },
+    "children": [
+        {
+            "node_type": "LOGICAL_FILTER",
+            "properties": {
+                "predicate": {
+                    "expression_type": "COMPARISON",
+                    "operator": ">",
+                    "left": { "expression_type": "COLUMN", "value": "age" },
+                    "right": { "expression_type": "CONSTANT", "value": 18 }
+                }
+            },
+            "children": [
+                {
+                    "node_type": "LOGICAL_JOIN",
+                    "properties": {
+                        "join_type": "INNER",
+                        "condition": {
+                            "expression_type": "COMPARISON",
+                            "operator": "=",
+                            "left": { "expression_type": "COLUMN", "value": "role_id" },
+                            "right": { "expression_type": "COLUMN", "value": "id" }
+                        }
+                    },
+                    "children": [
+                        {
+                            "node_type": "LOGICAL_GET",
+                            "properties": { "table": "users", "alias": "u" }
+                        },
+                        {
+                            "node_type": "LOGICAL_GET",
+                            "properties": { "table": "roles", "alias": "r" }
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

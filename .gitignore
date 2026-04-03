@@ -29,10 +29,12 @@ optimizer
 .idea/
 .DS_Store
 
-# Yacc and Lex Compiled
-*.tab.c 
-*.tab.h
-*.yy.c
+# --- Custom DBMS Project Files ---
 
-# Folder
+# Ignore generated Flex and Bison files
+lex.yy.c
+parser.tab.c
+parser.tab.h
+
+# Ignore the bin folder (where test_parser and optimizer live)
 bin/
