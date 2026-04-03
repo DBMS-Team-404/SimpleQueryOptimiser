@@ -8,6 +8,10 @@
 #include "semantic_analyzer.hpp"
 #include "optimizer.hpp"
 #include "cost_based_optimizer.hpp"
+#include "json.hpp"
+#include "semantic_analyzer.hpp"
+#include "optimizer.hpp"
+#include "cost_based_optimizer.hpp"
 
 using json = nlohmann::json;
 
