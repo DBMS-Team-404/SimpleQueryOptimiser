@@ -28,3 +28,11 @@ optimizer
 .vscode/
 .idea/
 .DS_Store
+
+# Yacc and Lex Compiled
+*.tab.c 
+*.tab.h
+*.yy.c
+
+# Folder
+bin/

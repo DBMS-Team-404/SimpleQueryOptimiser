@@ -2,7 +2,7 @@
     #include <iostream>
     #include <string>
     #include <vector>
-    #include "json.hpp"
+    #include <nlohmann/json.hpp>
     
     // For the header file and union
     using json = nlohmann::json;
@@ -10,7 +10,7 @@
 
 %{
     // --- THE MAGIC FIX: Include it here too for the .c file ---
-    #include "json.hpp"
+    #include <nlohmann/json.hpp>
     // ----------------------------------------------------------
 
     using json = nlohmann::json;
