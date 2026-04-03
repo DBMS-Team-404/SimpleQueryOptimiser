@@ -17,7 +17,10 @@ enum class NodeType {
     LOGICAL_JOIN,
     LOGICAL_AGGREGATE,
     LOGICAL_SORT,
-    LOGICAL_LIMIT
+    LOGICAL_LIMIT,
+    // PHYSICAL NODES
+    PHYSICAL_HASH_JOIN,
+    PHYSICAL_NESTED_LOOP_JOIN
 };
 
 enum class JoinType {
@@ -160,6 +163,38 @@ public:
 
     void print(int indent = 0) const override {
         std::cout << std::string(indent, ' ') << "-> LOGICAL_LIMIT (" << limit_count << ")\n";
+        for (const auto& child : children) child->print(indent + 4);
+    }
+};
+
+// ---------------------------------------------------------
+// PHYSICAL EXECUTION NODES (The Final Output)
+// ---------------------------------------------------------
+
+class PhysicalHashJoinNode : public PlanNode {
+public:
+    JoinType join_type;
+    std::unique_ptr<Expression> condition;
+
+    PhysicalHashJoinNode(JoinType jt, std::unique_ptr<Expression> cond) 
+        : PlanNode(NodeType::PHYSICAL_HASH_JOIN), join_type(jt), condition(std::move(cond)) {}
+
+    void print(int indent = 0) const override {
+        std::cout << std::string(indent, ' ') << "=> [PHYSICAL_HASH_JOIN] (Memory Optimized)\n";
+        for (const auto& child : children) child->print(indent + 4);
+    }
+};
+
+class PhysicalNestedLoopJoinNode : public PlanNode {
+public:
+    JoinType join_type;
+    std::unique_ptr<Expression> condition;
+
+    PhysicalNestedLoopJoinNode(JoinType jt, std::unique_ptr<Expression> cond) 
+        : PlanNode(NodeType::PHYSICAL_NESTED_LOOP_JOIN), join_type(jt), condition(std::move(cond)) {}
+
+    void print(int indent = 0) const override {
+        std::cout << std::string(indent, ' ') << "=> [PHYSICAL_NESTED_LOOP_JOIN] (CPU Intensive)\n";
         for (const auto& child : children) child->print(indent + 4);
     }
 };
