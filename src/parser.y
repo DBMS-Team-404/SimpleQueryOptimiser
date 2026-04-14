@@ -45,9 +45,16 @@
 
 /* Define types for non-terminals */
 %type <str_list> select_list group_by_list
+%type <str>      select_item
 %type <json_node> table_reference condition query expression where_clause group_by_clause
+%type <str> join_type
 
 %start sql_statement
+
+%left OR
+%left AND
+%left EQ NE
+%left LT GT LE GE
 
 %%
 
@@ -115,27 +122,64 @@ group_by_list:
         $$ = new std::vector<std::string>{std::string($1)};
         free($1);
     }
+    | ID DOT ID {
+        $$ = new std::vector<std::string>{std::string($1) + "." + std::string($3)};
+        free($1); free($3);
+    }
     | group_by_list COMMA ID {
         $1->push_back(std::string($3));
         $$ = $1;
         free($3);
     }
+    | group_by_list COMMA ID DOT ID {
+        $1->push_back(std::string($3) + "." + std::string($5));
+        $$ = $1;
+        free($3); free($5);
+    }
     ;
 
 select_list:
-    ID {
-        $$ = new std::vector<std::string>(); 
-        $$->push_back(std::string($1));
-        free($1); 
+    select_item {
+        $$ = new std::vector<std::string>();
+        $$->push_back(std::string($1)); // Convert char* to C++ std::string
+        free($1); // Free the memory we allocated in select_item
     }
-    | select_list COMMA ID {
-        $1->push_back(std::string($3)); 
+    | select_list COMMA select_item {
+        $1->push_back(std::string($3)); // Convert char* to C++ std::string
         $$ = $1;
-        free($3); 
+        free($3);
+    }
+    ;
+
+select_item:
+    ID {
+        // Just duplicate the string and pass it up
+        $$ = strdup($1);
+        free($1);
+    }
+    | ID DOT ID {
+        // Build it safely in C++, then extract the C-string
+        std::string full_column = std::string($1) + "." + std::string($3);
+        $$ = strdup(full_column.c_str());
+        free($1); free($3);
+    }
+    | ID DOT ASTERISK {
+        std::string full_column = std::string($1) + ".*";
+        $$ = strdup(full_column.c_str());
+        free($1);
     }
     | ASTERISK {
-        $$ = new std::vector<std::string>{"*"}; 
+        $$ = strdup("*");
     }
+    ;
+
+join_type:
+    JOIN         { $$ = strdup("INNER"); }
+    | INNER JOIN { $$ = strdup("INNER"); }
+    | LEFT JOIN  { $$ = strdup("LEFT");  }
+    | RIGHT JOIN { $$ = strdup("RIGHT"); }
+    | CROSS JOIN { $$ = strdup("CROSS"); }
+    | FULL JOIN  { $$ = strdup("FULL");  }
     ;
 
 table_reference:
@@ -144,29 +188,70 @@ table_reference:
             {"node_type", "LOGICAL_GET"},
             {"properties", {
                 {"table", std::string($1)},
-                {"alias", std::string($1) + "_alias"}
+                {"alias", std::string($1)}
             }}
         });
-        free($1); 
+        free($1);
     }
-    | table_reference JOIN ID ON condition {
+    | ID AS ID {
+        $$ = new json({
+            {"node_type", "LOGICAL_GET"},
+            {"properties", {
+                {"table", std::string($1)},
+                {"alias", std::string($3)}
+            }}
+        });
+        free($1); free($3);
+    }
+    | ID ID {
+        /* bare alias: FROM users u */
+        $$ = new json({
+            {"node_type", "LOGICAL_GET"},
+            {"properties", {
+                {"table", std::string($1)},
+                {"alias", std::string($2)}
+            }}
+        });
+        free($1); free($2);
+    }
+    | table_reference join_type ID ON condition {
         json* right_table = new json({
             {"node_type", "LOGICAL_GET"},
             {"properties", {
                 {"table", std::string($3)},
-                {"alias", std::string($3) + "_alias"}
+                {"alias", std::string($3)}
             }}
         });
-
         $$ = new json({
             {"node_type", "LOGICAL_JOIN"},
             {"properties", {
-                {"join_type", "INNER"},
+                {"join_type", std::string($2)},
                 {"condition", *$5}
             }},
             {"children", {*$1, *right_table}}
         });
-        delete $1; delete right_table; delete $5; free($3);
+        delete $1; delete right_table; delete $5;
+        free($2); free($3);
+    }
+    | table_reference join_type ID AS ID ON condition {
+        /* JOIN with alias: JOIN orders AS o ON ... */
+        json* right_table = new json({
+            {"node_type", "LOGICAL_GET"},
+            {"properties", {
+                {"table", std::string($3)},
+                {"alias", std::string($5)}
+            }}
+        });
+        $$ = new json({
+            {"node_type", "LOGICAL_JOIN"},
+            {"properties", {
+                {"join_type", std::string($2)},
+                {"condition", *$7}
+            }},
+            {"children", {*$1, *right_table}}
+        });
+        delete $1; delete right_table; delete $7;
+        free($2); free($3); free($5);
     }
     ;
 

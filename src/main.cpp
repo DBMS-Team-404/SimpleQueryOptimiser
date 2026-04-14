@@ -3,12 +3,12 @@
 #include <string>
 #include <memory>
 #include <cstdio> // Required for FILE* to interface with Flex/Bison
+#include <bitset>
 #include "../include/ast_nodes.hpp"
-#include "json.hpp"
 #include "semantic_analyzer.hpp"
 #include "optimizer.hpp"
 #include "cost_based_optimizer.hpp"
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 #include "semantic_analyzer.hpp"
 #include "optimizer.hpp"
 #include "cost_based_optimizer.hpp"
@@ -166,7 +166,8 @@ int main(int argc, char* argv[]) {
         std::cout << "--- LOGICAL EXECUTION PLAN ---\n";
         root->print(0);
 
-        MockCatalog my_catalog; 
+        // pls use the absolute path in your machine
+        MockCatalog my_catalog("src/catalog.json");
         
         // 2. Initialize your analyzer with your catalog interface
         SemanticAnalyzer analyzer(my_catalog);

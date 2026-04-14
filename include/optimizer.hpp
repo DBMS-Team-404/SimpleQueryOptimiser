@@ -45,57 +45,68 @@ public:
     }
 
 private:
+    // Replace pushDownFilters with this version that splits AND predicates
+
     std::unique_ptr<PlanNode> pushDownFilters(std::unique_ptr<PlanNode> node) {
         if (!node) return nullptr;
 
-        // 1. Process children first (Bottom-up)
-        for (auto& child : node->children) {
+        for (auto& child : node->children)
             child = pushDownFilters(std::move(child));
-        }
 
-        // 2. The Smart Filter Pushdown
         if (node->type == NodeType::LOGICAL_FILTER) {
-            if (!node->children.empty() && node->children[0]->type == NodeType::LOGICAL_JOIN) {
-                
-                // Extract the column name we are filtering on (e.g., "age" or "users.age")
-                auto filter_node = static_cast<LogicalFilterNode*>(node.get());
-                std::string col_name = getColumnName(filter_node->predicate.get());
-                
-                // If it's a fully qualified name (users.age), strip it down to just "age" for the catalog lookup
-                size_t dot_pos = col_name.find('.');
-                if (dot_pos != std::string::npos) col_name = col_name.substr(dot_pos + 1);
+            auto* filter_node = static_cast<LogicalFilterNode*>(node.get());
 
-                // Grab our pointers
-                auto filter = std::move(node);
-                auto join = std::move(filter->children[0]);
-                
-                // Figure out which tables are on the left and right of the join
-                std::string left_table = getTableName(join->children[0].get());
+            // If predicate is AND, split it and push each half independently
+            if (filter_node->predicate->type == ExpressionType::LOGICAL_AND) {
+                auto left_pred  = std::move(filter_node->predicate->left);
+                auto right_pred = std::move(filter_node->predicate->right);
+
+                // Build two separate FILTER nodes and push each
+                auto left_filter = std::make_unique<LogicalFilterNode>(std::move(left_pred));
+                left_filter->children = std::move(node->children);
+
+                auto right_filter = std::make_unique<LogicalFilterNode>(std::move(right_pred));
+                right_filter->children.push_back(std::move(left_filter));
+
+                return pushDownFilters(std::move(right_filter));
+            }
+
+            // Single predicate — existing logic handles this correctly
+            if (!node->children.empty() && 
+                node->children[0]->type == NodeType::LOGICAL_JOIN) {
+
+                auto* filter = static_cast<LogicalFilterNode*>(node.get());
+                std::string col_name = getColumnName(filter->predicate.get());
+
+                size_t dot_pos = col_name.find('.');
+                if (dot_pos != std::string::npos) 
+                    col_name = col_name.substr(dot_pos + 1);
+
+                auto filter_owned = std::move(node);
+                auto join = std::move(filter_owned->children[0]);
+
+                std::string left_table  = getTableName(join->children[0].get());
                 std::string right_table = getTableName(join->children[1].get());
 
-                // ASK THE CATALOG: Who owns this column?
                 if (catalog.columnExists(left_table, col_name)) {
-                    std::cout << "[RBO] Pushing Filter below Join onto Left Table (" << left_table << ")...\n";
-                    auto join_left_child = std::move(join->children[0]);
-                    filter->children[0] = std::move(join_left_child);
-                    join->children[0] = std::move(filter);
-                } 
+                    std::cout << "[RBO] Pushing Filter onto Left Table (" << left_table << ")...\n";
+                    auto join_left = std::move(join->children[0]);
+                    filter_owned->children[0] = std::move(join_left);
+                    join->children[0] = std::move(filter_owned);
+                }
                 else if (catalog.columnExists(right_table, col_name)) {
-                    std::cout << "[RBO] Pushing Filter below Join onto Right Table (" << right_table << ")...\n";
-                    auto join_right_child = std::move(join->children[1]);
-                    filter->children[0] = std::move(join_right_child);
-                    join->children[1] = std::move(filter);
+                    std::cout << "[RBO] Pushing Filter onto Right Table (" << right_table << ")...\n";
+                    auto join_right = std::move(join->children[1]);
+                    filter_owned->children[0] = std::move(join_right);
+                    join->children[1] = std::move(filter_owned);
                 }
                 else {
-                    // Fallback: If we can't figure it out, just leave it on top of the join
-                    filter->children[0] = std::move(join);
-                    return filter;
+                    filter_owned->children[0] = std::move(join);
+                    return filter_owned;
                 }
-
-                return join; 
+                return join;
             }
         }
-
         return node;
     }
 };

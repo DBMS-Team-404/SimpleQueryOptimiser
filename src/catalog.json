@@ -1,0 +1,29 @@
+{
+    "tables": {
+        "users": {
+            "num_tuples": 10000,
+            "num_blocks": 100,
+            "columns": ["id", "name", "age", "role_id"]
+        },
+        "orders": {
+            "num_tuples": 5000000,
+            "num_blocks": 25000,
+            "columns": ["id", "user_id", "amount", "order_date"]
+        },
+        "roles": {
+            "num_tuples": 50,
+            "num_blocks": 1,
+            "columns": ["id", "role_name"]
+        },
+        "products": {
+            "num_tuples": 8000,
+            "num_blocks": 80,
+            "columns": ["id", "name", "price", "category_id"]
+        },
+        "categories": {
+            "num_tuples": 20,
+            "num_blocks": 1,
+            "columns": ["id", "category_name"]
+        }
+    }
+}

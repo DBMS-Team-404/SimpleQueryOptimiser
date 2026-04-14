@@ -7,6 +7,7 @@ void count();
 %}
 
 %option yylineno
+%option case-insensitive
 
 %%
 [ \t\n\r]+      { /* Ignore whitespace */ }

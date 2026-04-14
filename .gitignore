@@ -23,6 +23,7 @@
 *.out
 *.app
 optimizer
+optimizer_test
 
 # IDE and OS specific files
 .vscode/
@@ -39,3 +40,8 @@ parser.tab.h
 
 # Ignore the bin folder (where test_parser and optimizer live)
 bin/
+
+# Unused Files
+commentedCBO.cpp
+parser_test.cpp
+test_optimizer.cpp

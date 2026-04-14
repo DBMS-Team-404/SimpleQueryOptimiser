@@ -4,52 +4,150 @@
 #include <string>
 #include <stdexcept>
 #include <iostream>
+#include <fstream>
 #include <array>
 #include <vector>
 #include <memory>
 #include <sstream>
+#include "nlohmann/json.hpp"
+
+using json = nlohmann::json;
 
 struct TableStats {
     size_t num_tuples;
     size_t num_blocks;
 };
 
-// 2. The Interface (Abstract Base Class)
+// ----------------------------------------------------------
+// INTERFACE
+// ----------------------------------------------------------
 class ICatalog {
 public:
     virtual ~ICatalog() = default;
     virtual TableStats getTableStats(const std::string& table_name) const = 0;
-
     virtual bool columnExists(const std::string& table_name, const std::string& column_name) const = 0;
 };
 
-// 3. The Fake Catalog (For fast, offline team testing)
+// ----------------------------------------------------------
+// MOCK CATALOG
+// Supports three modes:
+//   1. MockCatalog()            — hardcoded defaults (users/orders/roles)
+//   2. MockCatalog("file.json") — load schema from a JSON file
+//   3. addTable(...)            — add tables programmatically at runtime
+// ----------------------------------------------------------
 class MockCatalog : public ICatalog {
 private:
-    std::unordered_map<std::string, TableStats> table_statistics;
-
+    std::unordered_map<std::string, TableStats>              table_statistics;
     std::unordered_map<std::string, std::vector<std::string>> table_columns;
 
-public:
-    MockCatalog() {
-        table_statistics["users"] = {10000, 100};       
-        table_statistics["orders"] = {5000000, 25000}; 
-        table_statistics["roles"] = {50, 1}; 
+    void loadDefaults() {
+        table_statistics["users"]  = {10000,   100};
+        table_statistics["orders"] = {5000000, 25000};
+        table_statistics["roles"]  = {50,      1};
 
-        table_columns["users"] = {"id", "name", "age", "role_id"};
+        table_columns["users"]  = {"id", "name", "age", "role_id"};
         table_columns["orders"] = {"id", "user_id", "amount", "order_date"};
-        table_columns["roles"] = {"id", "role_name"}; 
+        table_columns["roles"]  = {"id", "role_name"};
     }
 
+    void loadFromJson(const std::string& file_path) {
+        std::ifstream f(file_path);
+        if (!f.is_open()) {
+            std::cerr << "[MockCatalog] WARNING: Could not open '" << file_path
+                      << "'. Falling back to hardcoded defaults.\n";
+            loadDefaults();
+            return;
+        }
+
+        json data;
+        try {
+            f >> data;
+        } catch (const json::parse_error& e) {
+            std::cerr << "[MockCatalog] WARNING: JSON parse error in '" << file_path
+                      << "': " << e.what() << ". Falling back to hardcoded defaults.\n";
+            loadDefaults();
+            return;
+        }
+
+        if (!data.contains("tables")) {
+            std::cerr << "[MockCatalog] WARNING: JSON missing 'tables' key. "
+                      << "Falling back to hardcoded defaults.\n";
+            loadDefaults();
+            return;
+        }
+
+        for (auto& [table_name, info] : data["tables"].items()) {
+            // --- stats ---
+            size_t tuples = info.value("num_tuples", 1000);
+            size_t blocks = info.value("num_blocks", 10);
+            table_statistics[table_name] = {tuples, blocks};
+
+            // --- columns ---
+            std::vector<std::string> cols;
+            if (info.contains("columns") && info["columns"].is_array()) {
+                for (const auto& col : info["columns"]) {
+                    cols.push_back(col.get<std::string>());
+                }
+            }
+            table_columns[table_name] = cols;
+        }
+
+        std::cout << "[MockCatalog] Loaded " << table_statistics.size()
+                  << " table(s) from '" << file_path << "'.\n";
+    }
+
+public:
+    // Mode 1: hardcoded defaults
+    MockCatalog() {
+        loadDefaults();
+    }
+
+    // Mode 2: load from JSON file
+    explicit MockCatalog(const std::string& json_file_path) {
+        loadFromJson(json_file_path);
+    }
+
+    // Mode 3: add a table at runtime (useful in tests / main.cpp)
+    void addTable(const std::string& table_name,
+                  size_t num_tuples,
+                  size_t num_blocks,
+                  const std::vector<std::string>& columns)
+    {
+        table_statistics[table_name] = {num_tuples, num_blocks};
+        table_columns[table_name]    = columns;
+        std::cout << "[MockCatalog] Added table '" << table_name << "' ("
+                  << num_tuples << " tuples, " << num_blocks << " blocks).\n";
+    }
+
+    // Print everything currently loaded — handy for debugging
+    void printSchema() const {
+        std::cout << "\n[MockCatalog] Current schema:\n";
+        for (const auto& [name, stats] : table_statistics) {
+            std::cout << "  " << name
+                      << " | tuples: " << stats.num_tuples
+                      << " | blocks: " << stats.num_blocks
+                      << " | columns: [";
+            auto it = table_columns.find(name);
+            if (it != table_columns.end()) {
+                for (size_t i = 0; i < it->second.size(); ++i) {
+                    std::cout << it->second[i];
+                    if (i + 1 < it->second.size()) std::cout << ", ";
+                }
+            }
+            std::cout << "]\n";
+        }
+        std::cout << "\n";
+    }
+
+    // ----------------------------------------------------------
+    // ICatalog interface
+    // ----------------------------------------------------------
     TableStats getTableStats(const std::string& table_name) const override {
         auto it = table_statistics.find(table_name);
-        if (it != table_statistics.end()) {
-            return it->second;
-        }
+        if (it != table_statistics.end()) return it->second;
         throw std::invalid_argument("Table not found in Mock Catalog: " + table_name);
     }
 
-    // NEW: Checks if the requested column is in the table's list
     bool columnExists(const std::string& table_name, const std::string& column_name) const override {
         auto it = table_columns.find(table_name);
         if (it != table_columns.end()) {
@@ -61,63 +159,58 @@ public:
     }
 };
 
-
-
-// 4. The Real PostgreSQL Catalog (Uses the terminal to query live data)
+// ----------------------------------------------------------
+// POSTGRES CATALOG (unchanged)
+// ----------------------------------------------------------
 class PostgresCatalog : public ICatalog {
 private:
     std::string connection_uri;
 
 public:
-    // 1.Constructor: Feed it all your PSQL details
-    PostgresCatalog(const std::string& host, const std::string& port, const std::string& db_name, 
-                    const std::string& user, const std::string& password)
+    PostgresCatalog(const std::string& host, const std::string& port,
+                    const std::string& db_name, const std::string& user,
+                    const std::string& password)
     {
-        // Build the official Postgres Connection URI
-        connection_uri = "postgresql://" + user + ":" + password + "@" + host + ":" + port + "/" + db_name;
+        connection_uri = "postgresql://" + user + ":" + password +
+                         "@" + host + ":" + port + "/" + db_name;
     }
 
     TableStats getTableStats(const std::string& table_name) const override {
-        // 2. Use the URI in the terminal command
-        // Notice we wrap the URI in quotes so the terminal doesn't misinterpret special characters in your password
-        std::string command = "psql \"" + connection_uri + "\" -q -t -c \"ANALYZE " + table_name + "; SELECT reltuples, relpages FROM pg_class WHERE relname='" + table_name + "';\"";        
-        std::string result = "";
+        std::string command =
+            "psql \"" + connection_uri + "\" -q -t -c \"ANALYZE " + table_name +
+            "; SELECT reltuples, relpages FROM pg_class WHERE relname='" + table_name + "';\"";
+        std::string result;
         std::array<char, 128> buffer;
-        
-        // Open the invisible terminal and run it
+
         std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
-        if (!pipe) {
-            throw std::runtime_error("popen() failed! Cannot run psql.");
-        }
-        
-        while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        if (!pipe) throw std::runtime_error("popen() failed! Cannot run psql.");
+
+        while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr)
             result += buffer.data();
-        }
 
         TableStats stats = {0, 0};
         std::stringstream ss(result);
         if (ss >> stats.num_tuples >> stats.num_blocks) {
-            if (stats.num_tuples == static_cast<size_t>(-1)) {
-                 std::cerr << "[WARNING] Table '" << table_name << "' has not been ANALYZED in Postgres.\n";
-            }
+            if (stats.num_tuples == static_cast<size_t>(-1))
+                std::cerr << "[WARNING] Table '" << table_name << "' has not been ANALYZED.\n";
             return stats;
         }
-
-        throw std::invalid_argument("Table not found or authentication failed for: " + table_name);
+        throw std::invalid_argument("Table not found or auth failed for: " + table_name);
     }
 
-    // NEW: Queries Postgres information_schema to see if a column exists
     bool columnExists(const std::string& table_name, const std::string& column_name) const override {
-        std::string command = "psql \"" + connection_uri + "\" -q -t -c \"SELECT 1 FROM information_schema.columns WHERE table_name='" + table_name + "' AND column_name='" + column_name + "';\"";
-        std::string result = "";
+        std::string command =
+            "psql \"" + connection_uri + "\" -q -t -c \"SELECT 1 FROM information_schema.columns "
+            "WHERE table_name='" + table_name + "' AND column_name='" + column_name + "';\"";
+        std::string result;
         std::array<char, 128> buffer;
 
         std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
         if (!pipe) return false;
 
-        while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) result += buffer.data();
+        while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr)
+            result += buffer.data();
 
-        // If Postgres returned "1", the column exists!
         return result.find("1") != std::string::npos;
     }
 };

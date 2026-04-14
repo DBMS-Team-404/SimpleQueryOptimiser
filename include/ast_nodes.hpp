@@ -11,13 +11,13 @@
 // ENUMS FOR NODE AND JOIN TYPES
 // ---------------------------------------------------------
 enum class NodeType {
-    LOGICAL_GET,
-    LOGICAL_FILTER,
-    LOGICAL_PROJECT,
-    LOGICAL_JOIN,
-    LOGICAL_AGGREGATE,
-    LOGICAL_SORT,
-    LOGICAL_LIMIT,
+    LOGICAL_GET,  // FROM
+    LOGICAL_FILTER, // WHERE, HAVING
+    LOGICAL_PROJECT, // SELECT
+    LOGICAL_JOIN, // JOIN
+    LOGICAL_AGGREGATE, // GROUP BY
+    LOGICAL_SORT, // ORDER BY
+    LOGICAL_LIMIT, // LIMIT
     // PHYSICAL NODES
     PHYSICAL_HASH_JOIN,
     PHYSICAL_NESTED_LOOP_JOIN
@@ -179,8 +179,12 @@ public:
     PhysicalHashJoinNode(JoinType jt, std::unique_ptr<Expression> cond) 
         : PlanNode(NodeType::PHYSICAL_HASH_JOIN), join_type(jt), condition(std::move(cond)) {}
 
+    // In PhysicalHashJoinNode::print():
     void print(int indent = 0) const override {
-        std::cout << std::string(indent, ' ') << "=> [PHYSICAL_HASH_JOIN] (Memory Optimized)\n";
+        std::string jt = (join_type == JoinType::LEFT) ? "LEFT " : 
+                        (join_type == JoinType::CROSS) ? "CROSS " : "";
+        std::cout << std::string(indent, ' ') 
+                << "=> [PHYSICAL_" << jt << "HASH_JOIN] (Memory Optimized)\n";
         for (const auto& child : children) child->print(indent + 4);
     }
 };
