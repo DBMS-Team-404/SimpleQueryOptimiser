@@ -30,6 +30,7 @@ optimizer_test
 .idea/
 .DS_Store
 query.json
+result.json
 
 # --- Custom DBMS Project Files ---
 

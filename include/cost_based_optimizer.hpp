@@ -50,7 +50,7 @@ class CostBasedOptimizer {
 private:
     ICatalog& catalog;
     std::unordered_map<uint32_t, DPEntry> memo;
-
+    double last_best_cost = 0.0;
     // -------------------------------------------------------
     // TableInfo: one entry per leaf table discovered.
     //
@@ -424,6 +424,8 @@ private:
 public:
     CostBasedOptimizer(ICatalog& cat) : catalog(cat) {}
 
+    double getLastCost() const { return last_best_cost; }
+
     std::unique_ptr<PlanNode> optimize(std::unique_ptr<PlanNode> root) {
         std::cout << "\n--- STARTING COST-BASED OPTIMIZATION (DP JOIN ENUMERATION) ---\n";
 
@@ -456,7 +458,7 @@ public:
 
         DPEntry& best = memo[full_mask];
         std::cout << "\n[DP] Best join plan cost: " << best.cost << "\n";
-
+        last_best_cost = best.cost;
         return wrapNonJoinNodes(std::move(best.plan), wrappers);
     }
 };

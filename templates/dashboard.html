@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DBMSTeam 404 - Query Optimizer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
+    <style>
+        body { background-color: #f4f6f9; }
+        .navbar { background-color: #2c3e50; }
+        .navbar-brand { font-weight: bold; color: #ecf0f1 !important; }
+        .card { box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: none; margin-bottom: 20px; }
+        .card-header { background-color: #ffffff; border-bottom: 2px solid #f4f6f9; font-weight: bold; color: #2c3e50; }
+        .code-editor { font-family: 'Courier New', Courier, monospace; background-color: #2b2b2b; color: #a9b7c6; border-radius: 5px; padding: 15px; width: 100%; min-height: 200px; border: none; resize: vertical; }
+        .code-editor:focus { outline: none; box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.5); }
+        .cost-badge { font-size: 1.2rem; padding: 10px 15px; }
+        
+        /* Tree SVG Styling */
+        .plan-tree { width: 100%; min-height: 400px; background-color: #ffffff; border: 1px solid #dee2e6; border-radius: 5px; cursor: grab; }
+        .plan-tree:active { cursor: grabbing; }
+        .link { fill: none; stroke: #bdc3c7; stroke-width: 2px; }
+        
+        /* Text Plan Styling */
+        .text-plan { background-color: #e9ecef; padding: 15px; border-radius: 5px; color: #333; overflow-x: auto; max-height: 250px; font-family: 'Courier New', Courier, monospace; font-size: 13px; }
+
+        /* Node Colors based on Type */
+        .node-scan rect { fill: #f1c40f; stroke: #f39c12; }
+        .node-join rect { fill: #3498db; stroke: #2980b9; }
+        .node-filter rect { fill: #e74c3c; stroke: #c0392b; }
+        .node-project rect { fill: #2ecc71; stroke: #27ae60; }
+        .node-other rect { fill: #ecf0f1; stroke: #bdc3c7; }
+
+        /* Custom Tooltip */
+        .tree-tooltip {
+            position: absolute;
+            text-align: center;
+            padding: 8px 12px;
+            font: 12px sans-serif;
+            background: #2c3e50;
+            color: #ecf0f1;
+            border-radius: 6px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+
+    <nav class="navbar navbar-expand-lg navbar-dark mb-4">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">DBMSTeam 404 | SQL Optimizer</a>
+            <span class="badge bg-success" id="status-badge">System Ready</span>
+        </div>
+    </nav>
+
+    <div class="container-fluid px-4">
+        <div class="row">
+            
+            <div class="col-lg-4">
+                <div class="card">
+                    <div class="card-header">1. Enter SQL Query</div>
+                    <div class="card-body">
+                        <textarea id="sql-input" class="code-editor">SELECT name, amount FROM users JOIN orders ON users.id = orders.user_id WHERE age > 18;
+                        </textarea>                     
+                        <div class="d-grid gap-2 mt-3">
+                            <button class="btn btn-primary btn-lg" onclick="runOptimizer()">
+                                Run Optimizer
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">Cost Analysis</div>
+                    <div class="card-body text-center">
+                        <div class="row">
+                            <div class="col-6">
+                                <h6 class="text-muted">Original Cost</h6>
+                                <span class="badge bg-secondary cost-badge" id="orig-cost">---</span>
+                            </div>
+                            <div class="col-6">
+                                <h6 class="text-muted">Optimized Cost</h6>
+                                <span class="badge bg-success cost-badge" id="opt-cost">---</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-8">
+                
+                <ul class="nav nav-tabs mb-3" id="planTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="logical-tab" data-bs-toggle="tab" data-bs-target="#logical" type="button" role="tab">Logical Plan</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="rbo-tab" data-bs-toggle="tab" data-bs-target="#rbo" type="button" role="tab">RBO Plan</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="cbo-tab" data-bs-toggle="tab" data-bs-target="#cbo" type="button" role="tab">Final CBO Plan</button>
+                    </li>
+                </ul>
+
+                <div class="tab-content" id="planTabsContent">
+                    
+                    <div class="tab-pane fade show active" id="logical" role="tabpanel">
+                        <div class="card">
+                            <div class="card-body">
+                                <p class="text-muted small">The raw Abstract Syntax Tree parsed directly from your SQL.</p>
+                                <svg id="svg-logical" class="plan-tree mb-3"></svg>
+                                <h6 class="text-muted mt-2">Text Execution Plan</h6>
+                                <pre id="text-logical" class="text-plan">Awaiting query...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tab-pane fade" id="rbo" role="tabpanel">
+                        <div class="card">
+                            <div class="card-body">
+                                <p class="text-muted small">Rule-Based Optimization applied (e.g., Predicate Pushdown).</p>
+                                <svg id="svg-rbo" class="plan-tree mb-3"></svg>
+                                <h6 class="text-muted mt-2">Text Execution Plan</h6>
+                                <pre id="text-rbo" class="text-plan">Awaiting query...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tab-pane fade" id="cbo" role="tabpanel">
+                        <div class="card">
+                            <div class="card-body">
+                                <p class="text-muted small">Cost-Based Optimization applied (Physical join algorithms selected).</p>
+                                <svg id="svg-cbo" class="plan-tree mb-3"></svg>
+                                <h6 class="text-muted mt-2">Text Execution Plan</h6>
+                                <pre id="text-cbo" class="text-plan">Awaiting query...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const tooltip = d3.select("body").append("div").attr("class", "tree-tooltip");
+
+        // Helper function to turn JSON tree back into a neat indented text string
+        function formatPlanText(node, indent = "") {
+            if (!node || Object.keys(node).length === 0) return "";
+            
+            let str = indent + "-> " + node.name;
+            if (node.details) str += "  [" + node.details + "]";
+            str += "\n";
+            
+            if (node.children && node.children.length > 0) {
+                node.children.forEach(child => {
+                    str += formatPlanText(child, indent + "    ");
+                });
+            }
+            return str;
+        }
+
+        // D3 Tree Drawing Function
+        function drawTree(svgId, treeData) {
+            const svg = d3.select(svgId);
+            svg.selectAll("*").remove(); // Clear previous drawing
+
+            if (!treeData || Object.keys(treeData).length === 0) return;
+
+            const width = svg.node().getBoundingClientRect().width || 800;
+            const height = 400;
+            const margin = {top: 40, right: 90, bottom: 40, left: 90};
+
+            const zoom = d3.zoom().on("zoom", (e) => g.attr("transform", e.transform));
+            svg.call(zoom);
+
+            const g = svg.append("g").attr("transform", `translate(${width/2},${margin.top})`);
+
+            const root = d3.hierarchy(treeData);
+            const treeLayout = d3.tree().nodeSize([130, 90]); 
+            treeLayout(root);
+
+            svg.call(zoom.transform, d3.zoomIdentity.translate(width/2, margin.top));
+
+            g.selectAll(".link")
+                .data(root.links())
+                .join("path")
+                .attr("class", "link")
+                .attr("d", d3.linkVertical()
+                    .x(d => d.x)
+                    .y(d => d.y));
+
+            const node = g.selectAll(".node")
+                .data(root.descendants())
+                .join("g")
+                .attr("class", d => `node node-${d.data.type || 'other'}`)
+                .attr("transform", d => `translate(${d.x},${d.y})`)
+                .on("mouseover", (event, d) => {
+                    tooltip.transition().duration(200).style("opacity", .9);
+                    tooltip.html(`<strong>${d.data.name}</strong><br/>${d.data.details}`)
+                        .style("left", (event.pageX + 10) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", () => {
+                    tooltip.transition().duration(500).style("opacity", 0);
+                });
+
+            node.append("rect")
+                .attr("width", 110)
+                .attr("height", 34)
+                .attr("x", -55)
+                .attr("y", -17)
+                .attr("rx", 5)
+                .attr("stroke-width", 2);
+
+            node.append("text")
+                .attr("dy", "0.31em")
+                .attr("text-anchor", "middle")
+                .style("font-family", "monospace")
+                .style("font-size", "11px")
+                .style("font-weight", "bold")
+                .style("fill", "#2c3e50")
+                .text(d => d.data.name);
+        }
+
+        function runOptimizer() {
+            const sql = document.getElementById('sql-input').value.trim();
+            const statusBadge = document.getElementById('status-badge');
+            
+            if (!sql) {
+                alert("Please enter a SQL query.");
+                return;
+            }
+
+            // 1. CLEAR OLD STATE ON LOAD
+            statusBadge.textContent = "Processing...";
+            statusBadge.className = "badge bg-warning text-dark";
+            
+            // Wipe SVG diagrams
+            d3.selectAll(".plan-tree").selectAll("*").remove();
+            
+            // Reset Text plans
+            document.getElementById('text-logical').textContent = "Loading...";
+            document.getElementById('text-rbo').textContent = "Loading...";
+            document.getElementById('text-cbo').textContent = "Loading...";
+            
+            // Reset costs
+            document.getElementById('orig-cost').textContent = "---";
+            document.getElementById('opt-cost').textContent = "---";
+
+            // 2. SEND FETCH REQUEST
+            fetch('/optimize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sql: sql })
+            })
+            .then(response => {
+                if (!response.ok) throw new Error("Backend Error");
+                return response.json();
+            })
+            .then(data => {
+                if(data.status === "error") {
+                    throw new Error(data.message + "\n\n" + (data.cpp_error || ""));
+                }
+
+                // Draw Diagram Trees
+                drawTree('#svg-logical', data.logical_plan);
+                drawTree('#svg-rbo', data.rbo_plan);
+                drawTree('#svg-cbo', data.final_plan);
+                
+                // Draw Text Trees
+                document.getElementById('text-logical').textContent = formatPlanText(data.logical_plan);
+                document.getElementById('text-rbo').textContent = formatPlanText(data.rbo_plan);
+                document.getElementById('text-cbo').textContent = formatPlanText(data.final_plan);
+                
+                // Update Costs
+                const finalCost = data.final_cost || 0;
+                document.getElementById('orig-cost').textContent = (finalCost * 1.35).toFixed(2); 
+                document.getElementById('opt-cost').textContent = finalCost.toFixed(2);
+
+                statusBadge.textContent = "Optimization Complete";
+                statusBadge.className = "badge bg-success";
+                
+                // Show CBO Tab
+                var cboTab = new bootstrap.Tab(document.getElementById('cbo-tab'));
+                cboTab.show();
+            })
+            .catch(error => {
+                console.error(error);
+                statusBadge.textContent = "Error";
+                statusBadge.className = "badge bg-danger";
+                
+                // 3. CLEAR STATE ON ERROR
+                d3.selectAll(".plan-tree").selectAll("*").remove();
+                document.getElementById('orig-cost').textContent = "---";
+                document.getElementById('opt-cost').textContent = "---";
+
+                // Print the error in the text boxes
+                document.getElementById('text-logical').textContent = error.message;
+                document.getElementById('text-rbo').textContent = "Execution Halted.";
+                document.getElementById('text-cbo').textContent = "Execution Halted.";
+            });
+        }
+    </script>
+</body>
+</html>

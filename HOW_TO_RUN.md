@@ -1,104 +1,156 @@
-# How to Build and Run — WSL Guide
+🚀 DBMSTeam 404 — Query Optimizer
 
-## Prerequisites (run once)
+A C++-based SQL Query Optimizer with support for:
 
-```bash
+Logical plan generation
+Rule-Based Optimization (RBO)
+Cost-Based Optimization (CBO) using Dynamic Programming
+Interactive Web Dashboard (Flask + D3.js)
+
+📦 Features
+🔍 SQL Parsing (Flex + Bison)
+🌳 Logical Query Plan Generation
+⚙️ Rule-Based Optimization (Filter Pushdown, etc.)
+📊 Cost-Based Optimization (Join Ordering via DP)
+🌐 Web UI with interactive tree visualization
+💻 CLI support for batch testing
+
+🛠️ 1. Prerequisites
+
+Run this once in WSL:
+
+# Update package list
 sudo apt update
+
+# Install C++ build tools
 sudo apt install -y flex bison g++ make
-```
 
----
+# Install Python and Flask (for dashboard)
+sudo apt install -y python3 python3-flask
 
-## Build
+⚠️ Using apt for Flask avoids the "externally managed environment" pip issue.
 
-```bash
-# From the project root (where makefile lives)
+⚙️ 2. Build the C++ Engine
+
+From the project root (where the Makefile exists):
+
 make
 
-# If you hit errors from a previous broken build, clean first
+If you encounter errors or change code:
+
 make rebuild
-```
 
-A successful build prints nothing and produces the `optimizer_test` binary in the project root.
+✅ Successful build:
 
----
+No output (silent success)
+Generates: optimizer_test binary
 
-## Run a single query
+🌐 3. Run the Web Dashboard (Recommended)
 
-```bash
+Start the Flask server:
+
+python3 app.py
+
+Open browser:
+
+http://localhost:8080
+Usage:
+Enter SQL query in editor
+Click Run Optimizer
+View:
+Logical Plan
+RBO Plan
+Final CBO Plan (with join strategies)
+💻 4. Run via Terminal (CLI)
+Run individual test:
 ./optimizer_test test_queries/test1_simple_scan.sql
 ./optimizer_test test_queries/test2_filter_pushdown.sql
 ./optimizer_test test_queries/test3_three_table_join.sql
-```
-
----
-
-## Run all tests in one shot
-
-```bash
+Run all tests:
 for f in test_queries/*.sql; do
     echo ""
     echo "=============================="
     echo "Running: $f"
     echo "=============================="
-    ./optimizer_test "$f" --live
+    ./optimizer_test "$f"
 done
-```
+📊 5. Understanding DP Output (CBO)
 
----
+Example:
 
-## Run with your catalog.json (if MockCatalog loads from file)
-
-Make sure `catalog.json` is in `src/` as shown in your file tree.
-The binary picks it up at runtime — no recompile needed when you
-change table stats.
-
----
-
-## What each test should print
-
-| Test | Expected outcome |
-|------|-----------------|
-| test1 | PROJECT -> GET(users). No join, no filter. |
-| test2 | RBO pushes FILTER(age>18) below JOIN onto GET(users). CBO picks Hash Join. |
-| test3 | DP explores 7 subsets. Best order should join roles(50 tuples) first. |
-| test4 | AGGREGATE node wraps the join core in the final plan. |
-| test5 | Physical node says LEFT not INNER. |
-| test6 | "[FAILED] Semantic Error: Table does not exist: invoices" |
-| test7 | "[FAILED] Semantic Error: Column not found: salary" |
-| test8 | Both filters pushed down independently to correct tables. |
-
----
-
-## Reading the DP output (test3 is the most interesting)
-
-```
 [DP] Found 3 table(s) to enumerate.
-[DP] Subset 0b00000011 new best cost: ...   <- users+orders
-[DP] Subset 0b00000101 new best cost: ...   <- users+roles
-[DP] Subset 0b00000110 new best cost: ...   <- orders+roles
-[DP] Subset 0b00000111 new best cost: ...   <- all three
+[DP] Subset 0b00000011 new best cost: ...
+[DP] Subset 0b00000101 new best cost: ...
+[DP] Subset 0b00000110 new best cost: ...
+[DP] Subset 0b00000111 new best cost: ...
 [DP] Best join plan cost: XXXX
-```
+Key Idea:
+Each subset = combination of tables
+Final subset (0b111) = all tables
+Lowest cost = optimal join order
 
-The subset with the lowest cost at `0b00000111` (all 3 bits set) is your winner.
-The final plan tree printed below it shows the physical join order the DP chose.
+🧪 6. Expected Test Results
+| Test  | Expected Behavior                                  |
+| ----- | -------------------------------------------------- |
+| test1 | Simple scan: `PROJECT → GET(users)`                |
+| test2 | Filter pushed below join; Hash Join selected       |
+| test3 | DP explores 7 subsets; smallest table joined first |
+| test4 | Aggregate node wraps join                          |
+| test5 | LEFT join appears in physical plan                 |
+| test6 | ❌ Table does not exist                             |
+| test7 | ❌ Column not found                                 |
+| test8 | Filters pushed independently                       |
 
----
+⚠️ 7. Common Errors & Fixes
+❌ Port 8080 already in use
 
-## Common errors and fixes
+Fix:
 
-**`parser.tab.h: No such file`**
-Bison didn't run. Check that `bison` is installed: `which bison`
+Ctrl + C
 
-**`'json.hpp' file not found`**
-The nlohmann header must be at `include/nlohmann/json.hpp`.
-Download it: https://github.com/nlohmann/json/releases/latest → single-header
+Stop existing server before restarting.
+❌ parser.tab.h not found
 
-**`Unexpected character` during parse**
-Your SQL has lowercase keywords and the lexer is case-sensitive.
-Add `%option case-insensitive` in `lexer.l` under `%option yylineno`.
+Cause: Bison not installed
+Fix:
 
-**`Table not found in Mock Catalog`**
-The table name in your SQL doesn't match what's in `catalog.json` or
-the hardcoded defaults. Check spelling — it's case-sensitive.
+which bison
+❌ 'json.hpp' file not found
+
+Fix:
+
+Ensure file exists at:
+include/nlohmann/json.hpp
+Download from official repo if missing
+❌ SQL parsing errors
+
+Fix:
+
+Ensure lexer has:
+%option case-insensitive
+❌ Table not found
+
+Fix:
+
+Check:
+src/catalog.json
+Query table names (case-sensitive)
+📁 Project Structure (Suggested)
+.
+├── src/
+├── include/
+│   └── nlohmann/json.hpp
+├── test_queries/
+├── app.py
+├── Makefile
+├── optimizer_test
+└── README.md
+🤝 Contributing
+Fork the repo
+Create a feature branch
+Submit a PR
+🧠 Notes
+RBO improves logical plan using heuristics
+CBO uses DP for optimal join ordering
+Visualization helps debug execution strategies
+📜 License

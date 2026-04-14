@@ -9,9 +9,6 @@
 #include "optimizer.hpp"
 #include "cost_based_optimizer.hpp"
 #include "nlohmann/json.hpp"
-#include "semantic_analyzer.hpp"
-#include "optimizer.hpp"
-#include "cost_based_optimizer.hpp"
 
 using json = nlohmann::json;
 
@@ -122,6 +119,95 @@ std::unique_ptr<PlanNode> parseNode(const json& j) {
 }
 
 // ---------------------------------------------------------
+// NEW: D3.js JSON GENERATOR
+// Recursively turns our C++ PlanNode tree into a nested JSON object
+// ---------------------------------------------------------
+json planToJson(const PlanNode* node) {
+    if (!node) return nullptr;
+    
+    json j;
+    // Map our C++ Node Types to Frontend Labels and CSS classes
+    switch (node->type) {
+        case NodeType::LOGICAL_GET: {
+            auto* n = static_cast<const LogicalGetNode*>(node);
+            j["name"] = "SCAN";
+            j["details"] = "Table: " + n->table_name + " (" + n->alias + ")";
+            j["type"] = "scan";
+            break;
+        }
+        case NodeType::LOGICAL_FILTER: {
+            j["name"] = "FILTER";
+            j["details"] = "Predicate Applied"; 
+            j["type"] = "filter";
+            break;
+        }
+        case NodeType::LOGICAL_PROJECT: {
+            auto* n = static_cast<const LogicalProjectNode*>(node);
+            j["name"] = "PROJECT";
+            std::string cols = "";
+            for (size_t i = 0; i < n->columns.size(); ++i) {
+                cols += n->columns[i];
+                if (i < n->columns.size() - 1) cols += ", ";
+            }
+            j["details"] = "Cols: " + cols;
+            j["type"] = "project";
+            break;
+        }
+        case NodeType::LOGICAL_JOIN: {
+            j["name"] = "LOGICAL JOIN";
+            j["details"] = "Unoptimized Join";
+            j["type"] = "join";
+            break;
+        }
+        case NodeType::PHYSICAL_HASH_JOIN: {
+            j["name"] = "HASH JOIN";
+            j["details"] = "Physical Hash Join Algorithm";
+            j["type"] = "join";
+            break;
+        }
+        case NodeType::PHYSICAL_NESTED_LOOP_JOIN: {
+            j["name"] = "NESTED LOOP";
+            j["details"] = "Physical Nested Loop Algorithm";
+            j["type"] = "join";
+            break;
+        }
+        default:
+            j["name"] = "NODE";
+            j["details"] = "";
+            j["type"] = "other";
+            break;
+    }
+
+    // Recursively process children
+    j["children"] = json::array();
+    for (const auto& child : node->children) {
+        j["children"].push_back(planToJson(child.get()));
+    }
+    
+    return j;
+}
+
+// --- UPDATED writeResultJson ---
+// Now accepts json objects instead of strings
+void writeResultJson(const std::string& out_path,
+                     const json& logical_plan_json,
+                     const json& rbo_plan_json,
+                     const json& final_plan_json,
+                     double final_cost)
+{
+    json out;
+    out["logical_plan"]  = logical_plan_json;
+    out["rbo_plan"]      = rbo_plan_json;
+    out["final_plan"]    = final_plan_json;
+    out["final_cost"]    = final_cost;
+    out["status"]        = "success";
+
+    std::ofstream f(out_path);
+    f << out.dump(2);
+    std::cout << "[UI] Result written to " << out_path << "\n";
+}
+
+// ---------------------------------------------------------
 // 3. COMMAND LINE INTERFACE (CLI)
 // ---------------------------------------------------------
 int main(int argc, char* argv[]) {
@@ -131,26 +217,25 @@ int main(int argc, char* argv[]) {
 
     if (argc < 2) {
         std::cerr << "Error: No input file provided.\n";
-        std::cerr << "Usage: ./optimizer <path_to_sql_file.sql>\n";
+        std::cerr << "Usage: ./optimizer_test <path_to_sql_file.sql>\n";
         return 1;
     }
 
     std::string file_path = argv[1];
-    
-    // 1. Open the SQL file using standard C FILE* (because Flex needs it)
     FILE* input_file = fopen(file_path.c_str(), "r");
     if (!input_file) {
         std::cerr << "Error: Could not open file " << file_path << "\n";
         return 1;
     }
 
-    // 2. Tell the Flex lexer to read from this file instead of the keyboard
     yyin = input_file;
+
+    // Variables to hold our JSON snapshots for the UI
+    json logical_json, rbo_json, final_json;
+    double final_cost = 0.0;
 
     try {
         std::cout << "Parsing SQL file: " << file_path << "...\n\n";
-
-        // 3. The Magic: Call Bison to parse SQL and return our JSON Contract!
         json query_json = parse_sql_to_json();
 
         if (query_json.empty() || query_json.is_null()) {
@@ -159,60 +244,51 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // 4. Our original magic: Convert JSON to C++ Memory Structures
         std::unique_ptr<PlanNode> root = parseNode(query_json);
 
-        // Print the resulting tree to the terminal
         std::cout << "--- LOGICAL EXECUTION PLAN ---\n";
         root->print(0);
+        
+        // Snapshot 1: Logical Plan (Converted to JSON for the frontend)
+        logical_json = planToJson(root.get());
 
         std::unique_ptr<ICatalog> catalog_ptr;
-
         if (argc >= 3 && std::string(argv[2]) == "--live") {
             std::cout << "[Catalog] Connecting to live PostgreSQL...\n";
-            catalog_ptr = std::make_unique<PostgresCatalog>(
-                "localhost",  // host
-                "5432",       // port
-                "optimizer_db", // database name
-                "postgres",   // user
-                "postgres123"            // password (empty for local trust auth)
-            );
-            
-            try {
-                catalog_ptr->getTableStats("users"); // smoke test
-                std::cout << "[Catalog] PostgreSQL connection OK.\n";
-            } catch (const std::exception& e) {
-                std::cerr << "[Catalog] Connection test failed: " << e.what() << "\n";
-                std::cerr << "Falling back to MockCatalog.\n";
-                catalog_ptr = std::make_unique<MockCatalog>("src/catalog.json");
-            }
+            catalog_ptr = std::make_unique<PostgresCatalog>("localhost", "5432", "optimizer_db", "postgres", "postgres123");
         } else {
             std::cout << "[Catalog] Using MockCatalog from src/catalog.json\n";
             catalog_ptr = std::make_unique<MockCatalog>("src/catalog.json");
         }
 
         ICatalog& my_catalog = *catalog_ptr;
-        
-        // 2. Initialize your analyzer with your catalog interface
         SemanticAnalyzer analyzer(my_catalog);
 
-        // 3. Pass the parsed tree (root) into the validate function.
         if (analyzer.validateQuery(root.get())) {
             std::cout << "\n[SUCCESS] Semantic check passed! Ready for optimization.\n";
-            // --- NEW OPTIMIZATION STEP ---
+            
             RuleBasedOptimizer rbo(my_catalog);
             root = rbo.optimize(std::move(root));
             
             std::cout << "\n--- OPTIMIZED EXECUTION PLAN ---\n";
             root->print(0);
-            // -----------------------------
-            CostBasedOptimizer cbo(my_catalog); // Pass the catalog so it can read stats!
+            
+            // Snapshot 2: RBO Plan (Converted to JSON)
+            rbo_json = planToJson(root.get());
+            
+            CostBasedOptimizer cbo(my_catalog);
             root = cbo.optimize(std::move(root));
 
             std::cout << "\n--- FINAL OPTIMIZED EXECUTION PLAN ---\n";
             root->print(0);
+            
+            // Snapshot 3: CBO Plan & Cost (Converted to JSON)
+            final_json = planToJson(root.get());
+            final_cost = cbo.getLastCost();
+
         } else {
             std::cout << "\n[FAILED] Semantic check failed. Stopping execution.\n";
+            fclose(input_file);
             return 1; 
         }
         
@@ -220,11 +296,16 @@ int main(int argc, char* argv[]) {
 
     } catch (const json::exception& e) {
         std::cerr << "AST Generation Error: " << e.what() << "\n";
-        std::cerr << "Make sure your Bison grammar outputs the correct API Contract!\n";
         fclose(input_file);
         return 1;
     }
 
     fclose(input_file);
+
+    // Write the JSON for the dashboard if the flag was passed
+    if (argc >= 3 && std::string(argv[2]) == "--html-out") {
+        writeResultJson("result.json", logical_json, rbo_json, final_json, final_cost);
+    }
+    
     return 0;
 }
