@@ -166,8 +166,32 @@ int main(int argc, char* argv[]) {
         std::cout << "--- LOGICAL EXECUTION PLAN ---\n";
         root->print(0);
 
-        // pls use the absolute path in your machine
-        MockCatalog my_catalog("src/catalog.json");
+        std::unique_ptr<ICatalog> catalog_ptr;
+
+        if (argc >= 3 && std::string(argv[2]) == "--live") {
+            std::cout << "[Catalog] Connecting to live PostgreSQL...\n";
+            catalog_ptr = std::make_unique<PostgresCatalog>(
+                "localhost",  // host
+                "5432",       // port
+                "optimizer_db", // database name
+                "postgres",   // user
+                "postgres123"            // password (empty for local trust auth)
+            );
+            
+            try {
+                catalog_ptr->getTableStats("users"); // smoke test
+                std::cout << "[Catalog] PostgreSQL connection OK.\n";
+            } catch (const std::exception& e) {
+                std::cerr << "[Catalog] Connection test failed: " << e.what() << "\n";
+                std::cerr << "Falling back to MockCatalog.\n";
+                catalog_ptr = std::make_unique<MockCatalog>("src/catalog.json");
+            }
+        } else {
+            std::cout << "[Catalog] Using MockCatalog from src/catalog.json\n";
+            catalog_ptr = std::make_unique<MockCatalog>("src/catalog.json");
+        }
+
+        ICatalog& my_catalog = *catalog_ptr;
         
         // 2. Initialize your analyzer with your catalog interface
         SemanticAnalyzer analyzer(my_catalog);

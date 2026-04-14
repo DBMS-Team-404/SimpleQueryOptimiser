@@ -160,11 +160,28 @@ public:
 };
 
 // ----------------------------------------------------------
-// POSTGRES CATALOG (unchanged)
+// POSTGRES CATALOG (fixed)
 // ----------------------------------------------------------
 class PostgresCatalog : public ICatalog {
 private:
     std::string connection_uri;
+
+    // Run a psql query and return trimmed stdout, or "" on failure
+    std::string runPsql(const std::string& sql) const {
+        // -q  : quiet (suppresses "ANALYZE" confirmation lines)
+        // -t  : tuples-only (no headers, no row-count footer)
+        // -A  : unaligned output (fields separated by | not spaces)
+        std::string command =
+            "psql \"" + connection_uri + "\" -q -t -A -c \"" + sql + "\" 2>/dev/null";
+
+        std::string result;
+        std::array<char, 256> buffer;
+        std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
+        if (!pipe) return "";
+        while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr)
+            result += buffer.data();
+        return result;
+    }
 
 public:
     PostgresCatalog(const std::string& host, const std::string& port,
@@ -173,44 +190,51 @@ public:
     {
         connection_uri = "postgresql://" + user + ":" + password +
                          "@" + host + ":" + port + "/" + db_name;
+        std::cout << "[PostgresCatalog] URI: " << connection_uri << "\n";
     }
 
     TableStats getTableStats(const std::string& table_name) const override {
-        std::string command =
-            "psql \"" + connection_uri + "\" -q -t -c \"ANALYZE " + table_name +
-            "; SELECT reltuples, relpages FROM pg_class WHERE relname='" + table_name + "';\"";
-        std::string result;
-        std::array<char, 128> buffer;
+        // ANALYZE separately (its "ANALYZE" echo goes to stderr with 2>/dev/null)
+        runPsql("ANALYZE " + table_name + ";");
 
-        std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
-        if (!pipe) throw std::runtime_error("popen() failed! Cannot run psql.");
+        // Cast to bigint so we get clean integers, not "10000.0"
+        std::string sql =
+            "SELECT reltuples::bigint, relpages "
+            "FROM pg_class "
+            "WHERE relname='" + table_name + "' AND relkind='r';";
 
-        while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr)
-            result += buffer.data();
+        std::string result = runPsql(sql);
 
+        // With -A, output looks like: "10000|64\n"
         TableStats stats = {0, 0};
+        char sep;
         std::stringstream ss(result);
-        if (ss >> stats.num_tuples >> stats.num_blocks) {
-            if (stats.num_tuples == static_cast<size_t>(-1))
-                std::cerr << "[WARNING] Table '" << table_name << "' has not been ANALYZED.\n";
+        if (ss >> stats.num_tuples >> sep >> stats.num_blocks) {
             return stats;
         }
-        throw std::invalid_argument("Table not found or auth failed for: " + table_name);
+
+        // Fallback: try whitespace-separated (in case -A wasn't respected)
+        std::stringstream ss2(result);
+        if (ss2 >> stats.num_tuples >> stats.num_blocks) {
+            return stats;
+        }
+
+        throw std::invalid_argument(
+            "[PostgresCatalog] Table not found or parse failed for: " + table_name +
+            "\n  Raw output was: '" + result + "'");
     }
 
-    bool columnExists(const std::string& table_name, const std::string& column_name) const override {
-        std::string command =
-            "psql \"" + connection_uri + "\" -q -t -c \"SELECT 1 FROM information_schema.columns "
-            "WHERE table_name='" + table_name + "' AND column_name='" + column_name + "';\"";
-        std::string result;
-        std::array<char, 128> buffer;
+    bool columnExists(const std::string& table_name,
+                      const std::string& column_name) const override {
+        // pg_attribute is faster and doesn't need information_schema privileges
+        std::string sql =
+            "SELECT 1 FROM pg_attribute a "
+            "JOIN pg_class c ON c.oid = a.attrelid "
+            "WHERE c.relname='" + table_name + "' "
+            "AND a.attname='" + column_name + "' "
+            "AND a.attnum > 0 AND NOT a.attisdropped;";
 
-        std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
-        if (!pipe) return false;
-
-        while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr)
-            result += buffer.data();
-
+        std::string result = runPsql(sql);
         return result.find("1") != std::string::npos;
     }
 };

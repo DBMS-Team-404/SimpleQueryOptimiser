@@ -41,7 +41,7 @@ for f in test_queries/*.sql; do
     echo "=============================="
     echo "Running: $f"
     echo "=============================="
-    ./optimizer_test "$f"
+    ./optimizer_test "$f" --live
 done
 ```
 
