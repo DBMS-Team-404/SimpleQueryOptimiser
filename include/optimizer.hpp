@@ -11,7 +11,7 @@ class RuleBasedOptimizer {
 private:
     ICatalog& catalog;
 
-    // Helper: Digs down a branch to find the name of the table sitting at the bottom
+    // Digs down a branch to find the name of the table sitting at the bottom
     std::string getTableName(PlanNode* node) {
         if (!node) return "";
         if (node->type == NodeType::LOGICAL_GET) {
@@ -23,7 +23,7 @@ private:
         return "";
     }
 
-    // Helper: Extracts the actual column name from an Expression like "age > 18"
+    // Extracts the actual column name from an Expression like "age > 18"
     std::string getColumnName(Expression* expr) {
         if (!expr) return "";
         if (expr->type == ExpressionType::COLUMN) return expr->value;
@@ -35,7 +35,6 @@ private:
     }
 
 public:
-    // NOW REQUIRES THE CATALOG!
     RuleBasedOptimizer(ICatalog& cat) : catalog(cat) {}
 
     std::unique_ptr<PlanNode> optimize(std::unique_ptr<PlanNode> root) {
@@ -46,7 +45,6 @@ public:
 
 private:
     // Replace pushDownFilters with this version that splits AND predicates
-
     std::unique_ptr<PlanNode> pushDownFilters(std::unique_ptr<PlanNode> node) {
         if (!node) return nullptr;
 
@@ -71,7 +69,7 @@ private:
                 return pushDownFilters(std::move(right_filter));
             }
 
-            // Single predicate — existing logic handles this correctly
+            // Single predicate: existing logic handles this correctly
             if (!node->children.empty() && 
                 node->children[0]->type == NodeType::LOGICAL_JOIN) {
 

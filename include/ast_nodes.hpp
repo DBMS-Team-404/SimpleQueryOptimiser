@@ -5,11 +5,9 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include "expressions.hpp" // We need the Expression struct we just built!
+#include "expressions.hpp"
 
-// ---------------------------------------------------------
 // ENUMS FOR NODE AND JOIN TYPES
-// ---------------------------------------------------------
 enum class NodeType {
     LOGICAL_GET,  // FROM
     LOGICAL_FILTER, // WHERE, HAVING
@@ -29,9 +27,7 @@ enum class JoinType {
     CROSS
 };
 
-// ---------------------------------------------------------
-// BASE CLASS: PlanNode
-// ---------------------------------------------------------
+// our BASE CLASS: PlanNode
 // Every operation in our tree will be a PlanNode.
 class PlanNode {
 public:
@@ -41,17 +37,12 @@ public:
     std::vector<std::unique_ptr<PlanNode>> children;
 
     PlanNode(NodeType t) : type(t) {}
-    virtual ~PlanNode() = default; // Essential for safe memory cleanup
-
-    // A virtual function so every node can print itself to the terminal beautifully
+    virtual ~PlanNode() = default; 
     virtual void print(int indent = 0) const = 0; 
 };
 
-// ---------------------------------------------------------
-// DERIVED CLASSES (The 7 SQL Operations)
-// ---------------------------------------------------------
-
-// 1. GET (FROM clause)
+// our DERIVED CLASSES for the 7 SQL Operations
+// GET (FROM clause)
 class LogicalGetNode : public PlanNode {
 public:
     std::string table_name;
@@ -65,7 +56,7 @@ public:
     }
 };
 
-// 2. FILTER (WHERE / HAVING clause)
+// FILTER (WHERE / HAVING clause)
 class LogicalFilterNode : public PlanNode {
 public:
     std::unique_ptr<Expression> predicate;
@@ -79,7 +70,7 @@ public:
     }
 };
 
-// 3. PROJECT (SELECT clause)
+// PROJECT (SELECT clause)
 class LogicalProjectNode : public PlanNode {
 public:
     std::vector<std::string> columns;
@@ -97,7 +88,7 @@ public:
     }
 };
 
-// 4. JOIN (JOIN clause)
+// JOIN (JOIN clause)
 class LogicalJoinNode : public PlanNode {
 public:
     JoinType join_type;
@@ -124,7 +115,7 @@ struct SortConfig {
     std::string direction; // "ASC" or "DESC"
 };
 
-// 5. AGGREGATE (GROUP BY clause)
+// AGGREGATE (GROUP BY clause)
 class LogicalAggregateNode : public PlanNode {
 public:
     std::vector<std::string> group_by_columns;
@@ -139,7 +130,7 @@ public:
     }
 };
 
-// 6. SORT (ORDER BY clause)
+// SORT (ORDER BY clause)
 class LogicalSortNode : public PlanNode {
 public:
     std::vector<SortConfig> sort_columns;
@@ -153,7 +144,7 @@ public:
     }
 };
 
-// 7. LIMIT (LIMIT clause)
+// LIMIT (LIMIT clause)
 class LogicalLimitNode : public PlanNode {
 public:
     int limit_count;
@@ -167,10 +158,7 @@ public:
     }
 };
 
-// ---------------------------------------------------------
 // PHYSICAL EXECUTION NODES (The Final Output)
-// ---------------------------------------------------------
-
 class PhysicalHashJoinNode : public PlanNode {
 public:
     JoinType join_type;

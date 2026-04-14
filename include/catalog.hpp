@@ -18,9 +18,7 @@ struct TableStats {
     size_t num_blocks;
 };
 
-// ----------------------------------------------------------
 // INTERFACE
-// ----------------------------------------------------------
 class ICatalog {
 public:
     virtual ~ICatalog() = default;
@@ -28,13 +26,11 @@ public:
     virtual bool columnExists(const std::string& table_name, const std::string& column_name) const = 0;
 };
 
-// ----------------------------------------------------------
 // MOCK CATALOG
 // Supports three modes:
 //   1. MockCatalog()            — hardcoded defaults (users/orders/roles)
 //   2. MockCatalog("file.json") — load schema from a JSON file
 //   3. addTable(...)            — add tables programmatically at runtime
-// ----------------------------------------------------------
 class MockCatalog : public ICatalog {
 private:
     std::unordered_map<std::string, TableStats>              table_statistics;
@@ -77,12 +73,12 @@ private:
         }
 
         for (auto& [table_name, info] : data["tables"].items()) {
-            // --- stats ---
+            // stats
             size_t tuples = info.value("num_tuples", 1000);
             size_t blocks = info.value("num_blocks", 10);
             table_statistics[table_name] = {tuples, blocks};
 
-            // --- columns ---
+            // columns
             std::vector<std::string> cols;
             if (info.contains("columns") && info["columns"].is_array()) {
                 for (const auto& col : info["columns"]) {
@@ -92,22 +88,21 @@ private:
             table_columns[table_name] = cols;
         }
 
-        std::cout << "[MockCatalog] Loaded " << table_statistics.size()
-                  << " table(s) from '" << file_path << "'.\n";
+        std::cout << "[MockCatalog] Loaded " << table_statistics.size() << " table(s) from '" << file_path << "'.\n";
     }
 
 public:
-    // Mode 1: hardcoded defaults
+    // hardcoded defaults
     MockCatalog() {
         loadDefaults();
     }
 
-    // Mode 2: load from JSON file
+    // load from JSON file
     explicit MockCatalog(const std::string& json_file_path) {
         loadFromJson(json_file_path);
     }
 
-    // Mode 3: add a table at runtime (useful in tests / main.cpp)
+    // add a table at runtime (useful in tests / main.cpp)
     void addTable(const std::string& table_name,
                   size_t num_tuples,
                   size_t num_blocks,
@@ -119,7 +114,6 @@ public:
                   << num_tuples << " tuples, " << num_blocks << " blocks).\n";
     }
 
-    // Print everything currently loaded — handy for debugging
     void printSchema() const {
         std::cout << "\n[MockCatalog] Current schema:\n";
         for (const auto& [name, stats] : table_statistics) {
@@ -139,9 +133,7 @@ public:
         std::cout << "\n";
     }
 
-    // ----------------------------------------------------------
     // ICatalog interface
-    // ----------------------------------------------------------
     TableStats getTableStats(const std::string& table_name) const override {
         auto it = table_statistics.find(table_name);
         if (it != table_statistics.end()) return it->second;
@@ -159,9 +151,7 @@ public:
     }
 };
 
-// ----------------------------------------------------------
-// POSTGRES CATALOG (fixed)
-// ----------------------------------------------------------
+// POSTGRES CATALOG 
 class PostgresCatalog : public ICatalog {
 private:
     std::string connection_uri;
@@ -224,8 +214,7 @@ public:
             "\n  Raw output was: '" + result + "'");
     }
 
-    bool columnExists(const std::string& table_name,
-                      const std::string& column_name) const override {
+    bool columnExists(const std::string& table_name, const std::string& column_name) const override {
         // pg_attribute is faster and doesn't need information_schema privileges
         std::string sql =
             "SELECT 1 FROM pg_attribute a "

@@ -6,21 +6,24 @@
 #include <string>
 #include <stdexcept>
 #include <memory>
+#include <unordered_map>
 
 #include "ast_nodes.hpp" 
 #include "catalog.hpp"   
 
 class SemanticAnalyzer {
 private:
-    // IMPORTANT: Changed to use the ICatalog interface from your catalog.hpp
     ICatalog& catalog;
-    std::vector<std::string> active_tables; 
+    
+    // Maps the alias (e.g., "u") to the actual table name (e.g., "users")
+    // This allows us to resolve u.id to users.id in the catalog.
+    std::unordered_map<std::string, std::string> alias_to_table; 
 
 public:
     SemanticAnalyzer(ICatalog& cat) : catalog(cat) {}
 
     bool validateQuery(PlanNode* root) {
-        active_tables.clear();
+        alias_to_table.clear();
         try {
             visitNode(root);
             return true; 
@@ -34,16 +37,19 @@ private:
     void visitNode(PlanNode* node) {
         if (node == nullptr) return;
 
+        // Walk bottom-up so tables are registered before their parent filters/projects
         for (const auto& child : node->children) {
             visitNode(child.get()); 
         }
 
         if (auto* get_node = dynamic_cast<LogicalGetNode*>(node)) {
-            // Your catalog throws an invalid_argument if a table is missing.
-            // We catch it and convert it to a semantic error.
             try {
+                // Verify the physical table exists in the DB[cite: 111].
                 catalog.getTableStats(get_node->table_name);
-                active_tables.push_back(get_node->table_name);
+                
+                // Register the alias-to-table mapping. 
+                // If no alias was provided, parser.y sets alias = table_name[cite: 396].
+                alias_to_table[get_node->alias] = get_node->table_name;
             } catch (const std::invalid_argument& e) {
                 throw std::runtime_error("Table does not exist in catalog: " + get_node->table_name);
             }
@@ -62,37 +68,30 @@ private:
     }
 
     void validateColumn(const std::string& column_name) {
-        if (column_name == "*") return; // Allow select star
+        if (column_name == "*") return; 
 
-        // NEW: Check if the column is fully qualified (e.g., "orders.user_id")
         size_t dot_pos = column_name.find('.');
         if (dot_pos != std::string::npos) {
-            std::string table_part = column_name.substr(0, dot_pos);
+            std::string alias_part = column_name.substr(0, dot_pos);
             std::string col_part = column_name.substr(dot_pos + 1);
 
-            // 1. Verify the table is actually in the query
-            bool table_active = false;
-            for (const auto& active_table : active_tables) {
-                if (active_table == table_part) {
-                    table_active = true;
-                    break;
-                }
-            }
-            if (!table_active) {
-                throw std::runtime_error("Table prefix '" + table_part + "' is not in the FROM/JOIN clause.");
+            // 1. Check if the alias is in scope for this query.
+            if (alias_to_table.find(alias_part) == alias_to_table.end()) {
+                throw std::runtime_error("Table prefix '" + alias_part + "' is not in the FROM/JOIN clause.");
             }
 
-            // 2. Ask the catalog if the specific column exists in that specific table
-            if (!catalog.columnExists(table_part, col_part)) {
-                throw std::runtime_error("Column '" + col_part + "' not found in table '" + table_part + "'.");
+            // 2. Resolve alias to physical table and check column existence.
+            std::string physical_table = alias_to_table[alias_part];
+            if (!catalog.columnExists(physical_table, col_part)) {
+                throw std::runtime_error("Column '" + col_part + "' not found in table '" + physical_table + "'.");
             }
-            return; // Validated successfully!
+            return; 
         }
 
-        // ORIGINAL: If no dot exists, just search all active tables
+        // Handle unqualified columns (search all tables currently in scope).
         bool column_found = false;
-        for (const auto& table : active_tables) {
-            if (catalog.columnExists(table, column_name)) {
+        for (const auto& pair : alias_to_table) {
+            if (catalog.columnExists(pair.second, column_name)) {
                 column_found = true;
                 break;
             }
