@@ -321,6 +321,7 @@ private:
 
                     if (!memo.count(subset) || total_cost < memo[subset].cost) {
                         memo[subset] = DPEntry(total_cost, out_stats, std::move(decision.node));
+                        std::cout << "[DP] Subset 0b" << std::bitset<8>(subset) << " new best cost: " << total_cost << "\n";
                     }
                 }
 
