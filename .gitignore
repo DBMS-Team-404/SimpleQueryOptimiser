@@ -46,6 +46,7 @@ bin/
 commentedCBO.cpp
 parser_test.cpp
 test_optimizer.cpp
+temp_query.sql
 
 # Images and stuff
 dbms_photos/
