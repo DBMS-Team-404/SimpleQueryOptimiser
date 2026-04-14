@@ -2,7 +2,7 @@
 #include <fstream>
 #include <string>
 #include <memory>
-#include <cstdio> // Required for FILE* to interface with Flex/Bison
+#include <cstdio>
 #include <bitset>
 #include "../include/ast_nodes.hpp"
 #include "semantic_analyzer.hpp"
@@ -12,19 +12,13 @@
 
 using json = nlohmann::json;
 
-// ---------------------------------------------------------
-// FORWARD DECLARATIONS
-// ---------------------------------------------------------
-// 1. Our C++ AST parser
+// Our C++ AST parser
 std::unique_ptr<PlanNode> parseNode(const json& j);
 
-// 2. The Flex/Bison hooks (Bridging C to C++)
 extern FILE* yyin; // Flex's input file pointer
-extern json parse_sql_to_json(); // The helper function from your teammate's parser.y
+extern json parse_sql_to_json();
 
-// ---------------------------------------------------------
-// 1. EXPRESSION PARSER
-// ---------------------------------------------------------
+// EXPRESSION PARSER
 std::unique_ptr<Expression> parseExpression(const json& j) {
     std::string type_str = j.at("expression_type").get<std::string>();
     
@@ -56,9 +50,7 @@ std::unique_ptr<Expression> parseExpression(const json& j) {
     return std::make_unique<Expression>(t, op, std::move(left_expr), std::move(right_expr));
 }
 
-// ---------------------------------------------------------
-// 2. NODE PARSER
-// ---------------------------------------------------------
+// NODE PARSER
 std::unique_ptr<PlanNode> parseNode(const json& j) {
     std::string type = j.at("node_type").get<std::string>();
     const auto& props = j.at("properties");
@@ -118,10 +110,8 @@ std::unique_ptr<PlanNode> parseNode(const json& j) {
     return node_ptr;
 }
 
-// ---------------------------------------------------------
-// NEW: D3.js JSON GENERATOR
+// D3.js JSON GENERATOR
 // Recursively turns our C++ PlanNode tree into a nested JSON object
-// ---------------------------------------------------------
 json planToJson(const PlanNode* node) {
     if (!node) return nullptr;
     
@@ -187,7 +177,6 @@ json planToJson(const PlanNode* node) {
     return j;
 }
 
-// --- UPDATED writeResultJson ---
 // Now accepts json objects instead of strings
 void writeResultJson(const std::string& out_path,
                      const json& logical_plan_json,
@@ -207,9 +196,7 @@ void writeResultJson(const std::string& out_path,
     std::cout << "[UI] Result written to " << out_path << "\n";
 }
 
-// ---------------------------------------------------------
-// 3. COMMAND LINE INTERFACE (CLI)
-// ---------------------------------------------------------
+// COMMAND LINE INTERFACE (CLI)
 int main(int argc, char* argv[]) {
     std::cout << "=========================================\n";
     std::cout << "      DBMSTeam 404 Optimizer Engine      \n";
@@ -249,7 +236,7 @@ int main(int argc, char* argv[]) {
         std::cout << "--- LOGICAL EXECUTION PLAN ---\n";
         root->print(0);
         
-        // Snapshot 1: Logical Plan (Converted to JSON for the frontend)
+        // Logical Plan: Converted to JSON for the frontend
         logical_json = planToJson(root.get());
 
         std::unique_ptr<ICatalog> catalog_ptr;
@@ -273,7 +260,7 @@ int main(int argc, char* argv[]) {
             std::cout << "\n--- OPTIMIZED EXECUTION PLAN ---\n";
             root->print(0);
             
-            // Snapshot 2: RBO Plan (Converted to JSON)
+            // RBO Plan: Converted to JSON
             rbo_json = planToJson(root.get());
             
             CostBasedOptimizer cbo(my_catalog);
@@ -282,7 +269,7 @@ int main(int argc, char* argv[]) {
             std::cout << "\n--- FINAL OPTIMIZED EXECUTION PLAN ---\n";
             root->print(0);
             
-            // Snapshot 3: CBO Plan & Cost (Converted to JSON)
+            // CBO Plan & Cost: Converted to JSON
             final_json = planToJson(root.get());
             final_cost = cbo.getLastCost();
 

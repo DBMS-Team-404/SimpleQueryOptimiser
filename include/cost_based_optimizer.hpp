@@ -18,9 +18,6 @@
 static constexpr double PRUNE_BUDGET    = 10'000'000.0;
 static constexpr double JOIN_SELECTIVITY = 0.1;
 
-// =============================================================
-// DP TABLE ENTRY
-// =============================================================
 struct DPEntry {
     double                   cost;
     TableStats               out_stats;
@@ -33,9 +30,6 @@ struct DPEntry {
     DPEntry& operator=(DPEntry&&) = default;
 };
 
-// =============================================================
-// JOIN EDGE
-// =============================================================
 struct JoinEdge {
     int                         left_idx;
     int                         right_idx;
@@ -43,43 +37,76 @@ struct JoinEdge {
     std::shared_ptr<Expression> condition;
 };
 
-// =============================================================
-// COST-BASED OPTIMIZER
-// =============================================================
+struct CrossFilter {
+    uint32_t required_mask;
+    std::shared_ptr<Expression> condition;
+};
+
 class CostBasedOptimizer {
 private:
     ICatalog& catalog;
     std::unordered_map<uint32_t, DPEntry> memo;
     double last_best_cost = 0.0;
-    // -------------------------------------------------------
-    // TableInfo: one entry per leaf table discovered.
-    //
-    // base_plan = raw pointer to the node that forms the base
-    // of this table in the original tree. Two cases:
-    //   (a) LOGICAL_GET          — plain scan, no filter
-    //   (b) LOGICAL_FILTER       — RBO pushed a filter here;
-    //       its child[0] is the GET
-    //
-    // We store a raw pointer because the original tree owns
-    // the memory. clonePlan() copies it before putting it in
-    // the memo table so the DP owns independent copies.
-    // -------------------------------------------------------
+
     struct TableInfo {
         std::string table_name;
         std::string alias;
         TableStats  stats;
-        PlanNode*   base_plan;  // GET or FILTER->GET
+        PlanNode* base_plan;  
     };
     std::vector<TableInfo> tables;
     std::vector<JoinEdge>  edges;
+    
+    std::vector<PlanNode*>   pending_cross_filters;
+    std::vector<CrossFilter> cross_filters;
 
-    // -------------------------------------------------------
-    // STEP 1 — walk the logical tree, collect tables and edges
-    // -------------------------------------------------------
+    // Finds all aliases in an expression so we can map the filter to a bitmask
+    void getReferencedAliases(Expression* expr, std::vector<std::string>& aliases) {
+        if (!expr) return;
+        if (expr->type == ExpressionType::COLUMN) {
+            std::string col = expr->value;
+            size_t dot_pos = col.find('.');
+            if (dot_pos != std::string::npos) {
+                std::string alias = col.substr(0, dot_pos);
+                if (std::find(aliases.begin(), aliases.end(), alias) == aliases.end()) {
+                    aliases.push_back(alias);
+                }
+            }
+        }
+        getReferencedAliases(expr->left.get(), aliases);
+        getReferencedAliases(expr->right.get(), aliases);
+    }
+
+    // Maps an alias string to the integer index used in the DP bitmask
+    int getTableIndex(const std::string& alias) {
+        for (int i = 0; i < (int)tables.size(); ++i) {
+            std::string current = tables[i].alias.empty() ? tables[i].table_name : tables[i].alias;
+            if (current == alias) return i;
+        }
+        return -1;
+    }
+
+    // Converts the safely stashed filters into DP-ready bitmasks
+    void resolveCrossFilters() {
+        for (PlanNode* node : pending_cross_filters) {
+            auto* filter = static_cast<LogicalFilterNode*>(node);
+            std::vector<std::string> aliases;
+            getReferencedAliases(filter->predicate.get(), aliases);
+            
+            uint32_t mask = 0;
+            for (const auto& alias : aliases) {
+                int idx = getTableIndex(alias);
+                if (idx != -1) mask |= (1u << idx);
+            }
+            if (mask != 0) {
+                cross_filters.push_back({mask, std::shared_ptr<Expression>(filter->predicate.get(), [](Expression*){})});
+            }
+        }
+    }
+
     void extractJoinTree(PlanNode* node) {
         if (!node) return;
 
-        // Case (a): plain table scan
         if (node->type == NodeType::LOGICAL_GET) {
             auto* get = static_cast<LogicalGetNode*>(node);
             TableStats stats = catalog.getTableStats(get->table_name);
@@ -87,19 +114,22 @@ private:
             return;
         }
 
-        // Case (b): filter pushed directly onto a GET by the RBO
-        if (node->type == NodeType::LOGICAL_FILTER &&
-            !node->children.empty() &&
-            node->children[0]->type == NodeType::LOGICAL_GET)
-        {
-            auto* get = static_cast<LogicalGetNode*>(node->children[0].get());
-            TableStats stats = catalog.getTableStats(get->table_name);
-            // base_plan is the FILTER node (owns the GET as its child)
-            tables.push_back({get->table_name, get->alias, stats, node});
-            return;
+        if (node->type == NodeType::LOGICAL_FILTER) {
+            // Leaf filter: attach to the table
+            if (!node->children.empty() && node->children[0]->type == NodeType::LOGICAL_GET) {
+                auto* get = static_cast<LogicalGetNode*>(node->children[0].get());
+                TableStats stats = catalog.getTableStats(get->table_name);
+                tables.push_back({get->table_name, get->alias, stats, node});
+                return;
+            } 
+            // Intermediate filter (LCA): Stash it safely!
+            else {
+                pending_cross_filters.push_back(node);
+                extractJoinTree(node->children[0].get());
+                return;
+            }
         }
 
-        // JOIN: record the edge between the two subtrees, then recurse
         if (node->type == NodeType::LOGICAL_JOIN) {
             auto* join = static_cast<LogicalJoinNode*>(node);
 
@@ -111,24 +141,18 @@ private:
             extractJoinTree(node->children[1].get());
 
             edges.push_back({
-                left_end   - 1,   // rightmost table on the left side
-                right_start,      // leftmost table on the right side
+                left_end   - 1,   
+                right_start,      
                 join->join_type,
-                // non-owning shared_ptr; cloned when building physical nodes
                 std::shared_ptr<Expression>(join->condition.get(), [](Expression*){})
             });
-            (void)left_start;
             return;
         }
 
-        // PROJECT / AGGREGATE / SORT / LIMIT above the join tree — recurse
         for (auto& child : node->children)
             extractJoinTree(child.get());
     }
 
-    // -------------------------------------------------------
-    // STEP 2 — deep-copy an Expression tree
-    // -------------------------------------------------------
     static std::unique_ptr<Expression> cloneExpr(const Expression* e) {
         if (!e) return nullptr;
         if (e->type == ExpressionType::COLUMN || e->type == ExpressionType::CONSTANT)
@@ -140,67 +164,44 @@ private:
         );
     }
 
-    // -------------------------------------------------------
-    // STEP 3 — deep-clone a PlanNode subtree
-    //
-    // BUG THAT WAS HERE: the LOGICAL_FILTER case was declaring
-    // its own local `copy` (shadowing the outer one declared at
-    // the top of the function), building the filter into it,
-    // then hitting `break` — the outer `copy` was still null,
-    // so the child loop below wrote children into null, and the
-    // local copy was immediately destroyed. Result: filter gone.
-    //
-    // FIX: every case now assigns into the single outer `copy`,
-    // and LOGICAL_GET returns early (no children to clone).
-    // -------------------------------------------------------
     std::unique_ptr<PlanNode> clonePlan(const PlanNode* node) {
         if (!node) return nullptr;
 
-        std::unique_ptr<PlanNode> copy;   // ONE copy variable for all cases
+        std::unique_ptr<PlanNode> copy;   
 
         switch (node->type) {
-
             case NodeType::LOGICAL_GET: {
                 auto* n = static_cast<const LogicalGetNode*>(node);
-                // GET has no children — return directly, skip child loop
                 return std::make_unique<LogicalGetNode>(n->table_name, n->alias);
             }
-
             case NodeType::LOGICAL_FILTER: {
                 auto* n = static_cast<const LogicalFilterNode*>(node);
                 copy = std::make_unique<LogicalFilterNode>(cloneExpr(n->predicate.get()));
-                break;  // fall through to child loop
+                break;  
             }
-
             case NodeType::PHYSICAL_HASH_JOIN: {
                 auto* n = static_cast<const PhysicalHashJoinNode*>(node);
                 copy = std::make_unique<PhysicalHashJoinNode>(
                     n->join_type, cloneExpr(n->condition.get()));
                 break;
             }
-
             case NodeType::PHYSICAL_NESTED_LOOP_JOIN: {
                 auto* n = static_cast<const PhysicalNestedLoopJoinNode*>(node);
                 copy = std::make_unique<PhysicalNestedLoopJoinNode>(
                     n->join_type, cloneExpr(n->condition.get()));
                 break;
             }
-
             default:
                 std::cerr << "[CBO] clonePlan: unexpected node type\n";
                 return nullptr;
         }
 
-        // Clone all children into the copy
         for (const auto& child : node->children)
             copy->children.push_back(clonePlan(child.get()));
 
         return copy;
     }
 
-    // -------------------------------------------------------
-    // STEP 4 — cardinality estimator for join output
-    // -------------------------------------------------------
     static TableStats estimateJoinOutput(const TableStats& left, const TableStats& right) {
         double out_tuples = std::max(1.0,
             (double)left.num_tuples * right.num_tuples * JOIN_SELECTIVITY);
@@ -212,9 +213,6 @@ private:
         return { (size_t)out_tuples, std::max(out_blocks, (size_t)1) };
     }
 
-    // -------------------------------------------------------
-    // STEP 5 — pick Hash Join vs NLJ, build the physical node
-    // -------------------------------------------------------
     struct JoinDecision {
         double                    cost;
         std::unique_ptr<PlanNode> node;
@@ -247,9 +245,6 @@ private:
         return { chosen_cost, std::move(physical) };
     }
 
-    // -------------------------------------------------------
-    // STEP 6 — find the join edge connecting two subsets
-    // -------------------------------------------------------
     const JoinEdge* findEdge(uint32_t left_mask, uint32_t right_mask) const {
         for (const auto& e : edges) {
             bool l_in_left  = (left_mask  >> e.left_idx)  & 1;
@@ -262,25 +257,13 @@ private:
         return nullptr;
     }
 
-    // -------------------------------------------------------
-    // STEP 7 — DP enumerator (left-deep + bushy, with pruning)
-    //
-    // BUG THAT WAS HERE: the base case always built a fresh
-    // LogicalGetNode, ignoring any FILTER the RBO had placed
-    // on the leaf. Even if extractJoinTree correctly recorded
-    // the FILTER as base_plan, the DP threw it away here.
-    //
-    // FIX: clone tables[i].base_plan instead of making a GET.
-    // -------------------------------------------------------
     void runDP() {
         int N = (int)tables.size();
         if (N == 0) return;
 
-        // Base case: each table alone
         for (int i = 0; i < N; i++) {
             uint32_t mask      = 1u << i;
             double   scan_cost = CostModel::costSequentialScan(tables[i].stats);
-            // Clone the full leaf plan — preserves any pushed-down filter
             auto base_clone = clonePlan(tables[i].base_plan);
             memo[mask] = DPEntry(scan_cost, tables[i].stats, std::move(base_clone));
         }
@@ -302,14 +285,9 @@ private:
                     DPEntry& right_entry = memo[right_mask];
 
                     double base_cost = left_entry.cost + right_entry.cost;
-                    if (base_cost >= PRUNE_BUDGET) {
-                        std::cout << "[DP] Pruning subset 0b" << std::bitset<8>(subset)
-                                  << " — base cost " << base_cost
-                                  << " exceeds budget " << PRUNE_BUDGET << "\n";
-                        continue;
-                    }
+                    if (base_cost >= PRUNE_BUDGET) continue;
 
-                    const JoinEdge*   edge = findEdge(left_mask, right_mask);
+                    const JoinEdge* edge = findEdge(left_mask, right_mask);
                     JoinType          jt   = edge ? edge->join_type : JoinType::CROSS;
                     const Expression* cond = edge ? edge->condition.get() : nullptr;
 
@@ -326,17 +304,26 @@ private:
                         left_entry.out_stats,  right_entry.out_stats
                     );
 
+                    for (const auto& cf : cross_filters) {
+                        // Condition: This new join subset satisfies ALL the tables the filter needs, 
+                        // AND neither the left branch nor the right branch could satisfy it alone.
+                        if ((cf.required_mask & subset) == cf.required_mask &&
+                            (cf.required_mask & left_mask) != cf.required_mask &&
+                            (cf.required_mask & right_mask) != cf.required_mask) {
+                            
+                            auto filter_node = std::make_unique<LogicalFilterNode>(cloneExpr(cf.condition.get()));
+                            filter_node->children.push_back(std::move(decision.node));
+                            decision.node = std::move(filter_node);
+                        }
+                    }
+
                     double total_cost = base_cost + decision.cost;
 
                     if (!memo.count(subset) || total_cost < memo[subset].cost) {
-                        memo[subset] = DPEntry(total_cost, out_stats,
-                                               std::move(decision.node));
-                        std::cout << "[DP] Subset 0b" << std::bitset<8>(subset)
-                                  << " new best cost: " << total_cost << "\n";
+                        memo[subset] = DPEntry(total_cost, out_stats, std::move(decision.node));
                     }
                 }
 
-                // Gosper's hack — next subset with same popcount
                 uint32_t c = subset & -subset;
                 uint32_t r = subset + c;
                 subset = (((r ^ subset) >> 2) / c) | r;
@@ -344,13 +331,6 @@ private:
         }
     }
 
-    // -------------------------------------------------------
-    // STEP 8 — collect wrapper nodes above the join subtree
-    //
-    // Stops at JOIN or GET nodes (those are the join tree).
-    // A FILTER directly on a GET is a leaf filter — already
-    // baked into base_plan, so we skip it here too.
-    // -------------------------------------------------------
     void collectWrappers(PlanNode* node, std::vector<PlanNode*>& out) {
         if (!node) return;
 
@@ -360,18 +340,14 @@ private:
 
         if (node->type == NodeType::LOGICAL_FILTER &&
             !node->children.empty() &&
-            node->children[0]->type == NodeType::LOGICAL_GET)
-            return;  // leaf filter — handled via base_plan, not a wrapper
+            (node->children[0]->type == NodeType::LOGICAL_GET || node->children[0]->type == NodeType::LOGICAL_JOIN))
+            return; 
 
         out.push_back(node);
         if (!node->children.empty())
             collectWrappers(node->children[0].get(), out);
     }
 
-    // -------------------------------------------------------
-    // STEP 9 — re-wrap the optimized join core with
-    // PROJECT / AGGREGATE / SORT / LIMIT (applied inside-out)
-    // -------------------------------------------------------
     std::unique_ptr<PlanNode> wrapNonJoinNodes(
         std::unique_ptr<PlanNode> join_core,
         std::vector<PlanNode*>&   wrappers)
@@ -432,18 +408,21 @@ public:
         std::vector<PlanNode*> wrappers;
         collectWrappers(root.get(), wrappers);
 
-        extractJoinTree(root.get());
+        // Make sure we start extracting EXACTLY where the wrappers stopped
+        PlanNode* join_tree_root = root.get();
+        if (!wrappers.empty() && !wrappers.back()->children.empty()) {
+            join_tree_root = wrappers.back()->children[0].get();
+        }
+
+        extractJoinTree(join_tree_root);
+        resolveCrossFilters(); // Converts stashed nodes into DP masks!
 
         int N = (int)tables.size();
         std::cout << "[DP] Found " << N << " table(s) to enumerate.\n";
 
-        if (N == 0) {
-            std::cout << "[DP] No tables found — returning tree unchanged.\n";
-            return root;
-        }
+        if (N == 0) return root;
 
         if (N == 1) {
-            std::cout << "[DP] Single table query — no join enumeration needed.\n";
             auto leaf = clonePlan(tables[0].base_plan);
             return wrapNonJoinNodes(std::move(leaf), wrappers);
         }
@@ -463,4 +442,4 @@ public:
     }
 };
 
-#endif // COST_BASED_OPTIMIZER_HPP
+#endif 

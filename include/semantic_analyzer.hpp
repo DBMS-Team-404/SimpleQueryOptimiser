@@ -44,11 +44,11 @@ private:
 
         if (auto* get_node = dynamic_cast<LogicalGetNode*>(node)) {
             try {
-                // Verify the physical table exists in the DB[cite: 111].
+                // Verify the physical table exists in the DB
                 catalog.getTableStats(get_node->table_name);
                 
                 // Register the alias-to-table mapping. 
-                // If no alias was provided, parser.y sets alias = table_name[cite: 396].
+                // If no alias was provided, parser.y sets alias = table_name
                 alias_to_table[get_node->alias] = get_node->table_name;
             } catch (const std::invalid_argument& e) {
                 throw std::runtime_error("Table does not exist in catalog: " + get_node->table_name);
@@ -75,12 +75,12 @@ private:
             std::string alias_part = column_name.substr(0, dot_pos);
             std::string col_part = column_name.substr(dot_pos + 1);
 
-            // 1. Check if the alias is in scope for this query.
+            // Check if the alias is in scope for this query.
             if (alias_to_table.find(alias_part) == alias_to_table.end()) {
                 throw std::runtime_error("Table prefix '" + alias_part + "' is not in the FROM/JOIN clause.");
             }
 
-            // 2. Resolve alias to physical table and check column existence.
+            // Resolve alias to physical table and check column existence.
             std::string physical_table = alias_to_table[alias_part];
             if (!catalog.columnExists(physical_table, col_part)) {
                 throw std::runtime_error("Column '" + col_part + "' not found in table '" + physical_table + "'.");
@@ -118,4 +118,4 @@ private:
     }
 };
 
-#endif // SEMANTIC_ANALYZER_HPP
+#endif

@@ -3,7 +3,6 @@
 #include "catalog.hpp"
 
 // COST CONSTANTS
-
 // Disk I/O
 const double SEQ_PAGE_COST    = 1.0;   // sequential block fetch (fastest)
 const double RANDOM_PAGE_COST = 4.0;   // random block fetch (4x slower: disk seek)

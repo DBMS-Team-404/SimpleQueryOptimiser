@@ -9,9 +9,7 @@
 }
 
 %{
-    // --- THE MAGIC FIX: Include it here too for the .c file ---
     #include <nlohmann/json.hpp>
-    // ----------------------------------------------------------
 
     using json = nlohmann::json;
 

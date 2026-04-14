@@ -35,4 +35,4 @@ struct Expression {
         : type(t), op(o), left(std::move(l)), right(std::move(r)) {}
 };
 
-#endif // EXPRESSIONS_HPP
+#endif
