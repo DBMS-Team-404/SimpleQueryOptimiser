@@ -16,9 +16,9 @@
 *.app
 
 # Flex/Bison generated files
-src/lex.yy.c
-src/parser.tab.c
-src/parser.tab.h
+*/lex.yy.c
+*/parser.tab.c
+*/parser.tab.h
 
 # Build output binary
 optimizer_test
