@@ -1,52 +1,52 @@
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
+# === Build Artifacts ===
 *.o
 *.obj
-
-# Compiled Dynamic libraries
+*.slo
+*.lo
+*.d
+*.a
+*.la
+*.lai
+*.lib
 *.so
 *.dylib
 *.dll
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
 *.exe
 *.out
 *.app
-optimizer
+
+# Flex/Bison generated files
+src/lex.yy.c
+src/parser.tab.c
+src/parser.tab.h
+
+# Build output binary
 optimizer_test
-
-# IDE and OS specific files
-.vscode/
-.idea/
-.DS_Store
-query.json
-result.json
-
-# --- Custom DBMS Project Files ---
-
-# Ignore generated Flex and Bison files
-lex.yy.c
-parser.tab.c
-parser.tab.h
-
-# Ignore the bin folder (where test_parser and optimizer live)
 bin/
 
-# Unused Files
+# === Runtime / Temp Files ===
+query.json
+result.json
+temp_query.sql
+
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+
+# === IDE / OS ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# === Project-specific ignores ===
 commentedCBO.cpp
 parser_test.cpp
 test_optimizer.cpp
-temp_query.sql
-
-# Images and stuff
 dbms_photos/
