@@ -1,88 +1,62 @@
-# DBMSTeam 404 — Query Optimizer
+# SimpleQueryOptimiser
 
-A C++-based SQL Query Optimizer with support for:
-* Logical plan generation
-* Rule-Based Optimization (RBO)
-* Cost-Based Optimization (CBO) using Dynamic Programming
-* Interactive Web Dashboard (Flask + D3.js)
+A SQL query optimizer built from scratch in C++17 as a DBMS course project at IIT Kharagpur. Takes raw SQL, parses it into a logical plan, applies rule-based and cost-based optimizations, and outputs a physical execution plan with concrete join algorithm selections — mirroring the optimizer pipeline inside production databases like PostgreSQL.
 
-## Features
-* SQL Parsing (Flex + Bison)
-* Logical Query Plan Generation
-* Rule-Based Optimization (Filter Pushdown, etc.)
-* Cost-Based Optimization (Join Ordering via DP)
-* Web UI with interactive tree visualization
-* CLI support for batch testing
+## Project Objective
 
-## 1. Prerequisites
+Implement the query optimization layer of a relational DBMS: given a SQL SELECT query, produce an efficient physical execution plan by applying heuristic rewrites (predicate pushdown) and cost-based join ordering (dynamic programming over join subsets with a disk/CPU/memory cost model).
 
-Run this once in WSL:
+## What We Built
+
+### Parsing — SQL to Structured AST
+
+The query string is tokenized with Flex and parsed with Bison into a JSON-based AST using nlohmann/json. The grammar supports SELECT with projections, multi-table JOINs (INNER, LEFT, CROSS, FULL), WHERE with nested AND/OR predicates, GROUP BY with HAVING, table aliases, and qualified column references (e.g., `u.age`). Using JSON as the intermediate representation decouples the C-based Flex/Bison layer from the C++17 optimizer pipeline, and also serves as the wire format for the web dashboard.
+
+### Semantic Validation — Catalog-Backed Type Checking
+
+Before optimization, a semantic analyzer walks the plan tree bottom-up and validates every table and column reference against a catalog. Tables are checked for existence, columns are checked against their owning table, and aliases are resolved (so `u.id` correctly maps to `users.id`). The catalog is accessed through an `ICatalog` interface with two backends: a `MockCatalog` that loads schema and statistics from `src/catalog.json`, and a `PostgresCatalog` that queries a live Postgres instance via `pg_class` and `pg_attribute` for real statistics.
+
+### Rule-Based Optimization — Predicate Pushdown
+
+The RBO pass pushes WHERE predicates as close to leaf scans as possible, reducing intermediate result sizes before expensive joins. Conjunctive predicates (`AND`) are first split into independent filters that can be pushed separately. Three cases are handled:
+
+- **Qualified single-table predicates** (`u.age > 18`): pushed directly above the referenced table's scan using the alias.
+- **Unqualified predicates** (`age > 18`): the catalog is queried to resolve which table owns the column, then pushed accordingly.
+- **Cross-table predicates** (`u1.age > u2.age`): pushed to the lowest common ancestor (LCA) of all referenced tables in the join tree — the earliest point where all required columns are available.
+
+### Cost-Based Optimization — DP Join Enumeration
+
+The CBO uses Selinger-style bottom-up dynamic programming over bitmask-encoded table subsets to find the optimal join order. For n tables, it evaluates all 2^n − 1 non-empty subsets, trying every binary partition of each subset and selecting the cheapest join. A prune budget skips partitions whose sub-plan costs already exceed a threshold.
+
+At each join candidate, the optimizer picks between Hash Join and Nested Loop Join using a cost model with five tunable constants: sequential and random I/O page costs, CPU tuple processing cost, CPU predicate evaluation cost, and hash table memory write cost. The formulas mirror PostgreSQL's approach — NLJ costs O(outer × inner) in I/O (re-reading the inner table for each outer tuple), while Hash Join costs O(outer + inner) with an additional memory cost for hash table construction. Cross-table filters from the RBO pass are re-injected at the exact DP subset where all their required tables first converge.
+
+### Web Dashboard
+
+A Flask server bridges the C++ engine and a D3.js frontend. Users enter a SQL query, and the dashboard renders three plan trees side by side — the raw logical plan, the RBO-optimized plan, and the final CBO physical plan — along with the computed cost.
+
+## How to Run
+
+### Prerequisites
 
 ```bash
-# Update package list
 sudo apt update
-
-# Install C++ build tools
-sudo apt install -y flex bison g++ make
-
-# Install Python and Flask (for dashboard)
-sudo apt install -y python3 python3-flask
+sudo apt install -y flex bison g++ make python3 python3-flask
 ```
 
-*Note: Using apt for Flask avoids the "externally managed environment" pip issue.*
-
-## 2. Build the C++ Engine
-
-From the project root (where the Makefile exists):
+### Build
 
 ```bash
-make
+make            # builds the optimizer_test binary
+make rebuild    # clean + rebuild
 ```
 
-If you encounter errors or change code:
-
-```bash
-make rebuild
-```
-
-**Successful build:**
-* No output (silent success)
-* Generates: optimizer_test binary
-
-## 3. Run the Web Dashboard (Recommended)
-
-Start the Flask server:
-
-```bash
-python3 app.py
-```
-
-Open browser:
-http://localhost:8080
-
-**Usage:**
-1. Enter SQL query in editor
-2. Click Run Optimizer
-3. View:
-   * Logical Plan
-   * RBO Plan
-   * Final CBO Plan (with join strategies)
-
-## 4. Run via Terminal (CLI)
-
-Run individual test:
+### Run via CLI
 
 ```bash
 ./optimizer_test test_queries/test1_simple_scan.sql
-./optimizer_test test_queries/test2_filter_pushdown.sql
-./optimizer_test test_queries/test3_three_table_join.sql
-```
 
-Run all tests:
-
-```bash
+# run all tests
 for f in test_queries/*.sql; do
-    echo ""
     echo "=============================="
     echo "Running: $f"
     echo "=============================="
@@ -90,75 +64,60 @@ for f in test_queries/*.sql; do
 done
 ```
 
-## 5. Understanding DP Output (CBO)
+### Run via Dashboard
 
-Example:
-
-```text
-[DP] Found 3 table(s) to enumerate.
-[DP] Subset 0b00000011 new best cost: ...
-[DP] Subset 0b00000101 new best cost: ...
-[DP] Subset 0b00000110 new best cost: ...
-[DP] Subset 0b00000111 new best cost: ...
-[DP] Best join plan cost: XXXX
+```bash
+python3 app.py
+# open http://localhost:8080
 ```
 
-**Key Idea:**
-* Each subset = combination of tables
-* Final subset (0b111) = all tables
-* Lowest cost = optimal join order
+### Live Postgres Mode
 
-## 6. Expected Test Results
+```bash
+./optimizer_test test_queries/test3_three_table_join.sql --live
+```
 
-| Test  | Expected Behavior                                  |
-| ----- | -------------------------------------------------- |
-| test1 | Simple scan: PROJECT -> GET(users)                 |
-| test2 | Filter pushed below join; Hash Join selected       |
-| test3 | DP explores 7 subsets; smallest table joined first |
-| test4 | Aggregate node wraps join                          |
-| test5 | LEFT join appears in physical plan                 |
-| test6 | Error: Table does not exist                        |
-| test7 | Error: Column not found                            |
-| test8 | Filters pushed independently                       |
+This connects to a local PostgreSQL instance and pulls real tuple/block statistics from `pg_class` instead of using the mock catalog.
 
-## 7. Common Errors & Fixes
+## Test Cases
 
-**Error: Port 8080 already in use**
-* Fix: Press Ctrl + C to stop existing server before restarting.
+| Test | What It Exercises |
+|------|-------------------|
+| test1 | Simple full-table scan — no joins, no filters. Plan is just PROJECT → GET. |
+| test2 | Single filter pushdown — `age > 18` is pushed below the join, Hash Join selected. |
+| test3 | Three-table join — DP explores 7 subsets, joins the smallest table (roles, 50 rows) first. |
+| test4 | GROUP BY with HAVING — aggregate node wraps the join subtree. |
+| test5 | LEFT JOIN — preserved in the physical plan (Hash Join respects join type). |
+| test6 | Bad table name — semantic analyzer catches `invoices` not in catalog. |
+| test7 | Bad column — semantic analyzer catches `salary` not in any active table. |
+| test8 | Conjunctive filter split — `age > 18 AND amount > 500` split and pushed to different tables. |
+| test9 | Four-table join with alias — DP explores 15 subsets, filter on `role_name` pushed to roles scan. |
+| test10 | Four tables with self-join + cross-table filter — `u1.age > u2.age` placed at LCA during DP. |
+| test11 | Five tables, self-join on both users and orders — stress test for DP enumeration and cross-filter injection. |
 
-**Error: parser.tab.h not found**
-* Cause: Bison not installed
-* Fix: Run `which bison` to verify, then install if missing.
-
-**Error: 'json.hpp' file not found**
-* Fix: Ensure file exists at `include/nlohmann/json.hpp`. Download from official repo if missing.
-
-**Error: SQL parsing errors**
-* Fix: Ensure lexer has `%option case-insensitive`.
-
-**Error: Table not found**
-* Fix: Check `src/catalog.json`. Query table names are case-sensitive.
-
-## Project Structure (Suggested)
-
-```text
-.
-├── src/
+## Project Structure
+```
 ├── include/
-│   └── nlohmann/json.hpp
-├── test_queries/
-├── app.py
-├── Makefile
-├── optimizer_test
-└── README.md
+│ ├── ast_nodes.hpp # Plan node class hierarchy
+│ ├── expressions.hpp # Expression tree for predicates
+│ ├── catalog.hpp # ICatalog interface, MockCatalog, PostgresCatalog
+│ ├── semantic_analyzer.hpp # Pre-optimization validation
+│ ├── optimizer.hpp # Rule-based optimizer (filter pushdown)
+│ ├── cost_model.hpp # I/O + CPU + memory cost formulas
+│ ├── cost_based_optimizer.hpp # DP join enumerator
+│ └── nlohmann/json.hpp # Third-party JSON library (vendored)
+├── src/
+│ ├── lexer.l # Flex tokenizer
+│ ├── parser.y # Bison grammar → JSON AST
+│ ├── main.cpp # CLI driver + JSON serializer for dashboard
+│ └── catalog.json # Mock schema with table statistics
+├── templates/
+│ └── dashboard.html # D3.js visualization frontend
+├── test_queries/ # SQL test files
+├── app.py # Flask server
+└── makefile
 ```
 
-## Contributing
-1. Fork the repo
-2. Create a feature branch
-3. Submit a PR
+## Team
 
-## Notes
-* RBO improves logical plan using heuristics
-* CBO uses DP for optimal join ordering
-* Visualization helps debug execution strategies
+Built by DBMS Team 404, IIT Kharagpur (Spring 2026).
